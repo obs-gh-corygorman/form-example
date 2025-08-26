@@ -3,6 +3,7 @@
 import { useForm } from "react-hook-form";
 import { z } from "zod";
 import { zodResolver } from "@hookform/resolvers/zod";
+import { instrumentedSyncFunction, addSpanAttributes, recordException } from "@/lib/telemetry";
 
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -26,6 +27,19 @@ import { Textarea } from "@/components/ui/textarea";
 import { Checkbox } from "@/components/ui/checkbox";
 
 export default function Home() {
+  // Instrument the component rendering
+  return instrumentedSyncFunction(
+    'component.render',
+    () => renderHomeComponent(),
+    {
+      'component.name': 'Home',
+      'component.type': 'page',
+      'page.path': '/'
+    }
+  );
+}
+
+function renderHomeComponent() {
   const formSchema = z.object({
     firstName: z.string().min(1, "First name is required"),
     lastName: z.string().min(1, "Last name is required"),
@@ -54,8 +68,45 @@ export default function Home() {
   });
 
   const onSubmit = (data: z.infer<typeof formSchema>) => {
-    // Handle form submission logic here
-    console.log("Form submitted:", data);
+    instrumentedSyncFunction(
+      'form.submit',
+      () => {
+        // Add form data attributes to the span
+        addSpanAttributes({
+          'form.field_count': Object.keys(data).length,
+          'form.interest': data.interest,
+          'form.message_length': data.message.length,
+          'form.terms_accepted': data.terms,
+          'user.first_name': data.firstName,
+          'user.last_name': data.lastName,
+          'user.email_domain': data.email.split('@')[1] || 'unknown'
+        });
+
+        try {
+          // Handle form submission logic here
+          console.log("Form submitted:", data);
+          
+          // Add success attributes
+          addSpanAttributes({
+            'form.submission.status': 'success',
+            'form.submission.timestamp': new Date().toISOString()
+          });
+          
+          return data;
+        } catch (error) {
+          recordException(error as Error);
+          addSpanAttributes({
+            'form.submission.status': 'error'
+          });
+          throw error;
+        }
+      },
+      {
+        'component': 'form',
+        'action': 'submit',
+        'page': 'home'
+      }
+    );
   };
 
   return (
