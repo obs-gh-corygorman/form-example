@@ -3,6 +3,10 @@
 import { useForm } from "react-hook-form";
 import { z } from "zod";
 import { zodResolver } from "@hookform/resolvers/zod";
+import { useEffect } from "react";
+import { trace, context, SpanStatusCode } from "@opentelemetry/api";
+import { SeverityNumber } from "@opentelemetry/api-logs";
+import { getOtelComponents } from "@/lib/otel-client";
 
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -26,6 +30,18 @@ import { Textarea } from "@/components/ui/textarea";
 import { Checkbox } from "@/components/ui/checkbox";
 
 export default function Home() {
+  // Initialize OpenTelemetry components
+  const { tracer, logger, meter } = getOtelComponents();
+
+  // Create metrics
+  const formSubmissionCounter = meter.createCounter("form_submissions_total", {
+    description: "Total number of form submissions",
+  });
+
+  const formValidationErrorCounter = meter.createCounter("form_validation_errors_total", {
+    description: "Total number of form validation errors",
+  });
+
   const formSchema = z.object({
     firstName: z.string().min(1, "First name is required"),
     lastName: z.string().min(1, "Last name is required"),
@@ -53,9 +69,130 @@ export default function Home() {
     reValidateMode: "onSubmit",
   });
 
+  // Track page load and component mount
+  useEffect(() => {
+    const span = tracer.startSpan("form_page_load");
+
+    try {
+      trace.setSpan(context.active(), span);
+      span.setAttributes({
+        "page.name": "form-example",
+        "component.name": "Home",
+        "user.session_id": crypto.randomUUID(),
+      });
+
+      logger.emit({
+        severityNumber: SeverityNumber.INFO,
+        severityText: "INFO",
+        body: "Form page loaded",
+        attributes: {
+          page: "form-example",
+          timestamp: new Date().toISOString(),
+        },
+      });
+
+      span.setStatus({ code: SpanStatusCode.OK });
+    } catch (error) {
+      span.setStatus({
+        code: SpanStatusCode.ERROR,
+        message: error instanceof Error ? error.message : "Unknown error"
+      });
+
+      logger.emit({
+        severityNumber: SeverityNumber.ERROR,
+        severityText: "ERROR",
+        body: "Error during page load",
+        attributes: {
+          error: error instanceof Error ? error.message : "Unknown error",
+        },
+      });
+    } finally {
+      span.end();
+    }
+  }, [tracer, logger]);
+
   const onSubmit = (data: z.infer<typeof formSchema>) => {
-    // Handle form submission logic here
-    console.log("Form submitted:", data);
+    const span = tracer.startSpan("form_submission");
+    const submissionId = crypto.randomUUID();
+
+    try {
+      trace.setSpan(context.active(), span);
+
+      // Set span attributes
+      span.setAttributes({
+        "form.submission_id": submissionId,
+        "form.interest": data.interest,
+        "form.message_length": data.message.length,
+        "form.email_domain": data.email.split("@")[1] || "unknown",
+        "user.first_name": data.firstName,
+        "user.last_name": data.lastName,
+        "form.terms_accepted": data.terms,
+      });
+
+      // Log form submission start
+      logger.emit({
+        severityNumber: SeverityNumber.INFO,
+        severityText: "INFO",
+        body: "Form submission started",
+        attributes: {
+          submission_id: submissionId,
+          interest: data.interest,
+          email_domain: data.email.split("@")[1] || "unknown",
+          message_length: data.message.length,
+          timestamp: new Date().toISOString(),
+        },
+      });
+
+      // Simulate form processing (in a real app, this would be an API call)
+      console.log("Form submitted:", data);
+
+      // Record successful submission
+      formSubmissionCounter.add(1, {
+        status: "success",
+        interest: data.interest,
+      });
+
+      // Log successful submission
+      logger.emit({
+        severityNumber: SeverityNumber.INFO,
+        severityText: "INFO",
+        body: "Form submission completed successfully",
+        attributes: {
+          submission_id: submissionId,
+          status: "success",
+          timestamp: new Date().toISOString(),
+        },
+      });
+
+      span.setStatus({ code: SpanStatusCode.OK });
+
+    } catch (error) {
+      // Record failed submission
+      formSubmissionCounter.add(1, {
+        status: "error",
+        interest: data.interest,
+      });
+
+      span.setStatus({
+        code: SpanStatusCode.ERROR,
+        message: error instanceof Error ? error.message : "Form submission failed"
+      });
+
+      logger.emit({
+        severityNumber: SeverityNumber.ERROR,
+        severityText: "ERROR",
+        body: "Form submission failed",
+        attributes: {
+          submission_id: submissionId,
+          error: error instanceof Error ? error.message : "Unknown error",
+          timestamp: new Date().toISOString(),
+        },
+      });
+
+      throw error;
+    } finally {
+      span.end();
+    }
   };
 
   return (
@@ -71,7 +208,47 @@ export default function Home() {
       </CardHeader>
       <CardContent>
         <Form {...form}>
-          <form onSubmit={form.handleSubmit(onSubmit)}>
+          <form onSubmit={form.handleSubmit(onSubmit, (errors) => {
+            // Track validation errors
+            const span = tracer.startSpan("form_validation_error");
+
+            try {
+              trace.setSpan(context.active(), span);
+
+              const errorFields = Object.keys(errors);
+              const errorMessages = Object.values(errors).map(error => error?.message).filter(Boolean);
+
+              span.setAttributes({
+                "form.validation_error_count": errorFields.length,
+                "form.error_fields": errorFields.join(","),
+              });
+
+              formValidationErrorCounter.add(1, {
+                error_count: errorFields.length.toString(),
+              });
+
+              logger.emit({
+                severityNumber: SeverityNumber.WARN,
+                severityText: "WARN",
+                body: "Form validation errors occurred",
+                attributes: {
+                  error_fields: errorFields,
+                  error_messages: errorMessages,
+                  error_count: errorFields.length,
+                  timestamp: new Date().toISOString(),
+                },
+              });
+
+              span.setStatus({ code: SpanStatusCode.OK });
+            } catch (error) {
+              span.setStatus({
+                code: SpanStatusCode.ERROR,
+                message: error instanceof Error ? error.message : "Error tracking validation"
+              });
+            } finally {
+              span.end();
+            }
+          })}>
             <div className="flex items-baseline justify-between gap-8 mb-4">
               <FormField
                 control={form.control}
