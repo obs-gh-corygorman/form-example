@@ -3,6 +3,9 @@
 import { useForm } from "react-hook-form";
 import { z } from "zod";
 import { zodResolver } from "@hookform/resolvers/zod";
+import { trace, context, SpanStatusCode } from "@opentelemetry/api";
+import { SeverityNumber } from "@opentelemetry/api-logs";
+import { getTracer, getLogger, getMeter } from "@/lib/otel-client";
 
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -54,8 +57,96 @@ export default function Home() {
   });
 
   const onSubmit = (data: z.infer<typeof formSchema>) => {
-    // Handle form submission logic here
-    console.log("Form submitted:", data);
+    const tracer = getTracer();
+    const logger = getLogger();
+    const meter = getMeter();
+
+    // Create a counter for form submissions
+    const formSubmissionCounter = meter.createCounter("form_submissions_total", {
+      description: "Total number of form submissions",
+    });
+
+    // Start a span for form submission
+    const span = tracer.startSpan("form_submission", {
+      attributes: {
+        "form.interest": data.interest,
+        "form.message_length": data.message.length,
+        "form.has_terms_accepted": data.terms,
+      },
+    });
+
+    try {
+      // Set span in context
+      trace.setSpan(context.active(), span);
+
+      // Log form submission start
+      logger.emit({
+        severityNumber: SeverityNumber.INFO,
+        severityText: "INFO",
+        body: "Form submission started",
+        attributes: {
+          "user.interest": data.interest,
+          "form.message_length": data.message.length,
+          "form.email_domain": data.email.split("@")[1] || "unknown",
+        },
+      });
+
+      // Handle form submission logic here
+      console.log("Form submitted:", data);
+
+      // Increment counter for successful submission
+      formSubmissionCounter.add(1, {
+        status: "success",
+        interest: data.interest,
+      });
+
+      // Log successful submission
+      logger.emit({
+        severityNumber: SeverityNumber.INFO,
+        severityText: "INFO",
+        body: "Form submission completed successfully",
+        attributes: {
+          "user.interest": data.interest,
+          "form.submission_status": "success",
+        },
+      });
+
+      // Set span status as OK
+      span.setStatus({ code: SpanStatusCode.OK });
+    } catch (error) {
+      // Handle errors
+      const errorMessage = error instanceof Error ? error.message : "Unknown error";
+
+      // Increment counter for failed submission
+      formSubmissionCounter.add(1, {
+        status: "error",
+        interest: data.interest,
+      });
+
+      // Log error
+      logger.emit({
+        severityNumber: SeverityNumber.ERROR,
+        severityText: "ERROR",
+        body: "Form submission failed",
+        attributes: {
+          "error.message": errorMessage,
+          "user.interest": data.interest,
+          "form.submission_status": "error",
+        },
+      });
+
+      // Set span status as error
+      span.setStatus({
+        code: SpanStatusCode.ERROR,
+        message: errorMessage,
+      });
+
+      // Re-throw error to maintain original behavior
+      throw error;
+    } finally {
+      // Always end the span
+      span.end();
+    }
   };
 
   return (
