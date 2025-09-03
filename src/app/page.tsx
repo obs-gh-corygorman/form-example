@@ -3,6 +3,9 @@
 import { useForm } from "react-hook-form";
 import { z } from "zod";
 import { zodResolver } from "@hookform/resolvers/zod";
+import { useEffect, useState } from "react";
+import { trace, context, SpanStatusCode, Tracer, Meter } from "@opentelemetry/api";
+import { SeverityNumber, Logger } from "@opentelemetry/api-logs";
 
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -26,6 +29,29 @@ import { Textarea } from "@/components/ui/textarea";
 import { Checkbox } from "@/components/ui/checkbox";
 
 export default function Home() {
+  // OpenTelemetry instances
+  const [otelInstances, setOtelInstances] = useState<{
+    tracer: Tracer;
+    logger: Logger;
+    meter: Meter;
+  } | null>(null);
+
+  useEffect(() => {
+    // Get OpenTelemetry instances after client initialization
+    const getOtelInstances = async () => {
+      try {
+        const { tracer, logger, meter } = await import("@/lib/otel-client");
+        setOtelInstances({ tracer, logger, meter });
+      } catch (error) {
+        console.error("Failed to get OpenTelemetry instances:", error);
+      }
+    };
+
+    // Wait a bit for OpenTelemetry to initialize
+    const timer = setTimeout(getOtelInstances, 100);
+    return () => clearTimeout(timer);
+  }, []);
+
   const formSchema = z.object({
     firstName: z.string().min(1, "First name is required"),
     lastName: z.string().min(1, "Last name is required"),
@@ -51,11 +77,130 @@ export default function Home() {
       terms: false,
     },
     reValidateMode: "onSubmit",
+    mode: "onChange", // Enable real-time validation for metrics
   });
 
+  // Track validation errors for metrics
+  useEffect(() => {
+    const errors = form.formState.errors;
+    const meter = otelInstances?.meter;
+    const logger = otelInstances?.logger;
+
+    if (meter && Object.keys(errors).length > 0) {
+      const validationErrorCounter = meter.createCounter("form_validation_errors_total", {
+        description: "Total number of form validation errors",
+      });
+
+      // Count errors by field
+      Object.keys(errors).forEach((fieldName) => {
+        validationErrorCounter.add(1, {
+          field: fieldName,
+          errorType: errors[fieldName as keyof typeof errors]?.type || "unknown",
+        });
+      });
+
+      // Log validation errors
+      if (logger) {
+        logger.emit({
+          severityNumber: SeverityNumber.WARN,
+          severityText: "WARN",
+          body: "Form validation errors detected",
+          attributes: {
+            "validation.errorCount": Object.keys(errors).length,
+            "validation.fields": Object.keys(errors).join(","),
+          },
+        });
+      }
+    }
+  }, [form.formState.errors, otelInstances]);
+
   const onSubmit = (data: z.infer<typeof formSchema>) => {
-    // Handle form submission logic here
-    console.log("Form submitted:", data);
+    // Create a span for form submission
+    const tracer = otelInstances?.tracer || trace.getTracer("form-example-client");
+    const logger = otelInstances?.logger;
+    const meter = otelInstances?.meter;
+
+    const span = tracer.startSpan("form_submission");
+
+    try {
+      // Set span in context
+      trace.setSpan(context.active(), span);
+
+      // Add span attributes
+      span.setAttributes({
+        "form.firstName": data.firstName,
+        "form.lastName": data.lastName,
+        "form.email": data.email,
+        "form.interest": data.interest,
+        "form.messageLength": data.message.length,
+        "form.termsAccepted": data.terms,
+      });
+
+      // Log form submission
+      if (logger) {
+        logger.emit({
+          severityNumber: SeverityNumber.INFO,
+          severityText: "INFO",
+          body: "Form submitted successfully",
+          attributes: {
+            "user.email": data.email,
+            "user.interest": data.interest,
+            "form.messageLength": data.message.length,
+          },
+        });
+      }
+
+      // Increment form submission counter
+      if (meter) {
+        const submissionCounter = meter.createCounter("form_submissions_total", {
+          description: "Total number of form submissions",
+        });
+        submissionCounter.add(1, {
+          interest: data.interest,
+          status: "success",
+        });
+      }
+
+      // Set span status as OK
+      span.setStatus({ code: SpanStatusCode.OK });
+
+      // Handle form submission logic here
+      console.log("Form submitted:", data);
+    } catch (error) {
+      // Set span status as error
+      span.setStatus({
+        code: SpanStatusCode.ERROR,
+        message: (error as Error).message
+      });
+
+      // Log error
+      if (logger) {
+        logger.emit({
+          severityNumber: SeverityNumber.ERROR,
+          severityText: "ERROR",
+          body: "Form submission failed",
+          attributes: {
+            "error.message": (error as Error).message,
+            "user.email": data.email,
+          },
+        });
+      }
+
+      // Increment error counter
+      if (meter) {
+        const submissionCounter = meter.createCounter("form_submissions_total", {
+          description: "Total number of form submissions",
+        });
+        submissionCounter.add(1, {
+          interest: data.interest,
+          status: "error",
+        });
+      }
+
+      throw error;
+    } finally {
+      span.end();
+    }
   };
 
   return (
