@@ -3,6 +3,9 @@
 import { useForm } from "react-hook-form";
 import { z } from "zod";
 import { zodResolver } from "@hookform/resolvers/zod";
+import { useEffect, useState } from "react";
+import { trace, context, SpanStatusCode, Tracer, Meter } from "@opentelemetry/api";
+import { SeverityNumber, Logger } from "@opentelemetry/api-logs";
 
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -26,6 +29,27 @@ import { Textarea } from "@/components/ui/textarea";
 import { Checkbox } from "@/components/ui/checkbox";
 
 export default function Home() {
+  const [otelInstances, setOtelInstances] = useState<{
+    tracer: Tracer;
+    logger: Logger;
+    meter: Meter;
+  } | null>(null);
+
+  useEffect(() => {
+    // Get OpenTelemetry instances after client initialization
+    const getOtelInstances = async () => {
+      try {
+        const { tracer, logger, meter } = await import("@/lib/otel-client");
+        setOtelInstances({ tracer, logger, meter });
+      } catch (error) {
+        console.error("Failed to get OpenTelemetry instances:", error);
+      }
+    };
+
+    // Small delay to ensure OpenTelemetry is initialized
+    setTimeout(getOtelInstances, 100);
+  }, []);
+
   const formSchema = z.object({
     firstName: z.string().min(1, "First name is required"),
     lastName: z.string().min(1, "Last name is required"),
@@ -54,8 +78,79 @@ export default function Home() {
   });
 
   const onSubmit = (data: z.infer<typeof formSchema>) => {
-    // Handle form submission logic here
-    console.log("Form submitted:", data);
+    // Create a span for form submission
+    const tracer = trace.getTracer("form-example-client");
+    const span = tracer.startSpan("form_submission");
+
+    try {
+      // Set span in context
+      trace.setSpan(context.active(), span);
+
+      // Add attributes to the span
+      span.setAttributes({
+        "form.firstName": data.firstName,
+        "form.lastName": data.lastName,
+        "form.email": data.email,
+        "form.interest": data.interest,
+        "form.messageLength": data.message.length,
+        "form.termsAccepted": data.terms,
+      });
+
+      // Log the form submission
+      if (otelInstances?.logger) {
+        otelInstances.logger.emit({
+          severityNumber: SeverityNumber.INFO,
+          severityText: "INFO",
+          body: "Form submitted successfully",
+          attributes: {
+            firstName: data.firstName,
+            lastName: data.lastName,
+            email: data.email,
+            interest: data.interest,
+            messageLength: data.message.length,
+          },
+        });
+      }
+
+      // Increment form submission counter
+      if (otelInstances?.meter) {
+        const formSubmissionCounter = otelInstances.meter.createCounter("form_submissions_total", {
+          description: "Total number of form submissions",
+        });
+        formSubmissionCounter.add(1, {
+          interest: data.interest,
+          status: "success",
+        });
+      }
+
+      // Handle form submission logic here
+      console.log("Form submitted:", data);
+
+      // Set successful status
+      span.setStatus({ code: SpanStatusCode.OK });
+    } catch (error) {
+      // Log error
+      if (otelInstances?.logger) {
+        otelInstances.logger.emit({
+          severityNumber: SeverityNumber.ERROR,
+          severityText: "ERROR",
+          body: "Form submission failed",
+          attributes: {
+            error: (error as Error).message,
+          },
+        });
+      }
+
+      // Set error status
+      span.setStatus({
+        code: SpanStatusCode.ERROR,
+        message: (error as Error).message
+      });
+
+      throw error;
+    } finally {
+      span.end();
+    }
   };
 
   return (
