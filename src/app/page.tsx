@@ -3,6 +3,11 @@
 import { useForm } from "react-hook-form";
 import { z } from "zod";
 import { zodResolver } from "@hookform/resolvers/zod";
+import { useFormTelemetry } from "@/hooks/use-form-telemetry";
+import { InstrumentedFormField } from "@/components/instrumented-form-field";
+import { formLogger, logUserAction, logBusinessEvent } from "@/lib/logger";
+import { recordPageView, recordFormSubmission, recordUserAction, recordBusinessEvent } from "@/lib/metrics";
+import { useEffect } from "react";
 
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -40,6 +45,46 @@ export default function Home() {
     }),
   });
 
+  // Initialize form telemetry
+  const { trackFieldInteraction, trackValidation, trackSubmission } = useFormTelemetry({
+    formName: "contact-form",
+    userId: "anonymous", // In a real app, this would come from auth context
+  });
+
+  // Log component initialization and record metrics
+  useEffect(() => {
+    const pageLoadStart = performance.now();
+
+    formLogger.info("Contact form component initialized", {
+      component: "ContactForm",
+      formName: "contact-form",
+      userId: "anonymous",
+    });
+
+    logUserAction("form_page_viewed", {
+      formName: "contact-form",
+      timestamp: new Date().toISOString(),
+    });
+
+    // Record page view metrics
+    recordPageView("contact-form", {
+      userId: "anonymous",
+      timestamp: new Date().toISOString(),
+    });
+
+    recordUserAction("page_viewed", {
+      page: "contact-form",
+      userId: "anonymous",
+    });
+
+    // Record page load performance
+    const pageLoadDuration = performance.now() - pageLoadStart;
+    recordBusinessEvent("page_load_completed", 1, {
+      page: "contact-form",
+      duration: pageLoadDuration.toString(),
+    });
+  }, []);
+
   const form = useForm<z.infer<typeof formSchema>>({
     resolver: zodResolver(formSchema),
     defaultValues: {
@@ -53,9 +98,82 @@ export default function Home() {
     reValidateMode: "onSubmit",
   });
 
-  const onSubmit = (data: z.infer<typeof formSchema>) => {
-    // Handle form submission logic here
-    console.log("Form submitted:", data);
+  const onSubmit = async (data: z.infer<typeof formSchema>) => {
+    const startTime = Date.now();
+
+    try {
+      // Log form submission attempt
+      await formLogger.info("Form submission started", {
+        component: "ContactForm",
+        formName: "contact-form",
+        userId: "anonymous",
+        hasFirstName: !!data.firstName,
+        hasLastName: !!data.lastName,
+        hasEmail: !!data.email,
+        interest: data.interest,
+        messageLength: data.message.length,
+        termsAccepted: data.terms,
+      });
+
+      // Track form validation before submission
+      const isValid = Object.keys(form.formState.errors).length === 0;
+      await trackValidation(isValid, form.formState.errors);
+
+      // Track form submission
+      await trackSubmission(data, true);
+
+      // Log successful submission and record metrics
+      const duration = Date.now() - startTime;
+      await logBusinessEvent("form_submitted_successfully", {
+        formName: "contact-form",
+        userId: "anonymous",
+        duration,
+        interest: data.interest,
+      });
+
+      // Record form submission metrics
+      recordFormSubmission("contact-form", true, {
+        userId: "anonymous",
+        interest: data.interest,
+        duration: duration.toString(),
+      });
+
+      recordBusinessEvent("form_submission_success", 1, {
+        formName: "contact-form",
+        interest: data.interest,
+        duration: duration.toString(),
+      });
+
+      // Handle form submission logic here
+      console.log("Form submitted:", data);
+    } catch (error) {
+      // Track failed submission
+      await trackSubmission(data, false, error as Error);
+
+      // Log submission error and record metrics
+      const errorDuration = Date.now() - startTime;
+      await formLogger.error("Form submission failed", error as Error, {
+        component: "ContactForm",
+        formName: "contact-form",
+        userId: "anonymous",
+        duration: errorDuration,
+      });
+
+      // Record failed submission metrics
+      recordFormSubmission("contact-form", false, {
+        userId: "anonymous",
+        error: (error as Error).message,
+        duration: errorDuration.toString(),
+      });
+
+      recordBusinessEvent("form_submission_error", 1, {
+        formName: "contact-form",
+        error: (error as Error).message,
+        duration: errorDuration.toString(),
+      });
+
+      console.error("Form submission failed:", error);
+    }
   };
 
   return (
@@ -107,22 +225,20 @@ export default function Home() {
               />
             </div>
 
-            <FormField
+            <InstrumentedFormField
               control={form.control}
               name="email"
-              render={({ field }) => (
-                <FormItem className="mb-4">
-                  <FormLabel className="text-blue-400">Email</FormLabel>
-                  <FormControl>
-                    <Input
-                      {...field}
-                      className="border-blue-200 text-blue-400 focus:border-blue-400"
-                    />
-                  </FormControl>
-                  <FormMessage className="text-red-500" />
-                </FormItem>
+              label="Email"
+              className="mb-4"
+              onFieldInteraction={trackFieldInteraction}
+            >
+              {(field) => (
+                <Input
+                  {...field}
+                  className="border-blue-200 text-blue-400 focus:border-blue-400"
+                />
               )}
-            />
+            </InstrumentedFormField>
 
             <FormField
               control={form.control}
