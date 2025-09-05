@@ -3,6 +3,7 @@
 import { useForm } from "react-hook-form";
 import { z } from "zod";
 import { zodResolver } from "@hookform/resolvers/zod";
+import { useFormInstrumentation } from "@/hooks/use-form-instrumentation";
 
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -26,6 +27,8 @@ import { Textarea } from "@/components/ui/textarea";
 import { Checkbox } from "@/components/ui/checkbox";
 
 export default function Home() {
+  const { trackFieldInteraction, trackFormValidation, trackFormSubmission } = useFormInstrumentation();
+
   const formSchema = z.object({
     firstName: z.string().min(1, "First name is required"),
     lastName: z.string().min(1, "Last name is required"),
@@ -53,9 +56,20 @@ export default function Home() {
     reValidateMode: "onSubmit",
   });
 
-  const onSubmit = (data: z.infer<typeof formSchema>) => {
-    // Handle form submission logic here
-    console.log("Form submitted:", data);
+  const onSubmit = async (data: z.infer<typeof formSchema>) => {
+    // Track form validation
+    const formState = form.formState;
+    trackFormValidation(formState.isValid, formState.errors);
+
+    // Handle form submission with instrumentation
+    await trackFormSubmission(data, async (formData) => {
+      // Simulate form processing
+      console.log("Form submitted:", formData);
+
+      // Here you would typically send data to an API
+      // For now, we'll just simulate a delay
+      await new Promise(resolve => setTimeout(resolve, 100));
+    });
   };
 
   return (
@@ -83,6 +97,12 @@ export default function Home() {
                       <Input
                         {...field}
                         className="border-blue-200 text-blue-400 focus:border-blue-400"
+                        onFocus={() => trackFieldInteraction("firstName", "focus")}
+                        onBlur={() => trackFieldInteraction("firstName", "blur", field.value)}
+                        onChange={(e) => {
+                          field.onChange(e);
+                          trackFieldInteraction("firstName", "change", e.target.value);
+                        }}
                       />
                     </FormControl>
                     <FormMessage className="text-red-500" />
@@ -117,6 +137,12 @@ export default function Home() {
                     <Input
                       {...field}
                       className="border-blue-200 text-blue-400 focus:border-blue-400"
+                      onFocus={() => trackFieldInteraction("email", "focus")}
+                      onBlur={() => trackFieldInteraction("email", "blur", field.value)}
+                      onChange={(e) => {
+                        field.onChange(e);
+                        trackFieldInteraction("email", "change", e.target.value);
+                      }}
                     />
                   </FormControl>
                   <FormMessage className="text-red-500" />
