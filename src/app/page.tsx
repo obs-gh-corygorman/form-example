@@ -3,8 +3,6 @@
 import { useForm } from "react-hook-form";
 import { z } from "zod";
 import { zodResolver } from "@hookform/resolvers/zod";
-import { trace } from "@opentelemetry/api";
-import { logs as logsApi, SeverityNumber } from "@opentelemetry/api-logs";
 
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -26,14 +24,8 @@ import {
 } from "@/components/ui/form";
 import { Textarea } from "@/components/ui/textarea";
 import { Checkbox } from "@/components/ui/checkbox";
-import { useFormMetrics } from "@/hooks/useFormMetrics";
 
 export default function Home() {
-  // Get tracer and logger for instrumentation
-  const tracer = trace.getTracer("form-example-client");
-  const logger = logsApi.getLogger("form-example-client");
-  const { trackSubmission, trackValidationError } = useFormMetrics();
-
   const formSchema = z.object({
     firstName: z.string().min(1, "First name is required"),
     lastName: z.string().min(1, "Last name is required"),
@@ -61,90 +53,9 @@ export default function Home() {
     reValidateMode: "onSubmit",
   });
 
-  // Handle form validation errors
-  const onError = (errors: Record<string, { message?: string }>) => {
-    const span = tracer.startSpan("form.validation_error");
-
-    const errorFields = Object.keys(errors);
-    const errorMessages = errorFields.map(field => errors[field]?.message).filter(Boolean);
-
-    // Track validation errors for metrics
-    errorFields.forEach(field => {
-      const errorMessage = errors[field]?.message || "unknown";
-      trackValidationError(field, errorMessage);
-    });
-
-    logger.emit({
-      severityNumber: SeverityNumber.WARN,
-      severityText: "WARN",
-      body: "Form validation failed",
-      attributes: {
-        "validation.error_count": errorFields.length,
-        "validation.error_fields": errorFields.join(", "),
-        "validation.error_messages": errorMessages.join("; "),
-      },
-    });
-
-    span.setAttributes({
-      "validation.error_count": errorFields.length,
-      "validation.error_fields": errorFields.join(", "),
-    });
-
-    span.setStatus({ code: 2, message: "Form validation failed" });
-    span.end();
-  };
-
   const onSubmit = (data: z.infer<typeof formSchema>) => {
-    // Create a span to track form submission
-    const span = tracer.startSpan("form.submit", {
-      attributes: {
-        "form.interest": data.interest,
-        "form.message_length": data.message.length,
-        "form.terms_accepted": data.terms,
-      },
-    });
-
-    try {
-      // Log form submission
-      logger.emit({
-        severityNumber: SeverityNumber.INFO,
-        severityText: "INFO",
-        body: "Form submitted successfully",
-        attributes: {
-          "user.firstName": data.firstName,
-          "user.lastName": data.lastName,
-          "user.email": data.email,
-          "user.interest": data.interest,
-          "form.message_length": data.message.length,
-        },
-      });
-
-      // Track successful submission
-      trackSubmission(true, data.interest);
-
-      // Handle form submission logic here
-      console.log("Form submitted:", data);
-
-      span.setStatus({ code: 1 }); // OK status
-    } catch (error) {
-      // Track failed submission
-      trackSubmission(false, data.interest);
-
-      // Log error
-      logger.emit({
-        severityNumber: SeverityNumber.ERROR,
-        severityText: "ERROR",
-        body: "Form submission failed",
-        attributes: {
-          error: (error as Error).message,
-        },
-      });
-
-      span.recordException(error as Error);
-      span.setStatus({ code: 2, message: (error as Error).message }); // ERROR status
-    } finally {
-      span.end();
-    }
+    // Handle form submission logic here
+    console.log("Form submitted:", data);
   };
 
   return (
@@ -160,7 +71,7 @@ export default function Home() {
       </CardHeader>
       <CardContent>
         <Form {...form}>
-          <form onSubmit={form.handleSubmit(onSubmit, onError)}>
+          <form onSubmit={form.handleSubmit(onSubmit)}>
             <div className="flex items-baseline justify-between gap-8 mb-4">
               <FormField
                 control={form.control}
