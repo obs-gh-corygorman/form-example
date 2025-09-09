@@ -3,6 +3,19 @@
 import { useForm } from "react-hook-form";
 import { z } from "zod";
 import { zodResolver } from "@hookform/resolvers/zod";
+import { useEffect, useRef } from "react";
+import { trace, context, SpanStatusCode } from "@opentelemetry/api";
+import { SeverityNumber } from "@opentelemetry/api-logs";
+
+// Type for OpenTelemetry logger
+interface OtelLogger {
+  emit: (logRecord: {
+    severityNumber: number;
+    severityText: string;
+    body: string;
+    attributes?: Record<string, string | number | boolean>;
+  }) => void;
+}
 
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -26,6 +39,23 @@ import { Textarea } from "@/components/ui/textarea";
 import { Checkbox } from "@/components/ui/checkbox";
 
 export default function Home() {
+  // Get tracer and logger for instrumentation
+  const tracer = trace.getTracer("form-example-client");
+  const loggerRef = useRef<OtelLogger | null>(null);
+
+  useEffect(() => {
+    // Initialize logger after client-side OpenTelemetry is ready
+    import("../../otel-client").then(({ logger: clientLogger }) => {
+      loggerRef.current = clientLogger;
+      loggerRef.current.emit({
+        severityNumber: SeverityNumber.INFO,
+        severityText: "INFO",
+        body: "Form page loaded",
+        attributes: { component: "Home" },
+      });
+    });
+  }, []);
+
   const formSchema = z.object({
     firstName: z.string().min(1, "First name is required"),
     lastName: z.string().min(1, "Last name is required"),
@@ -54,8 +84,60 @@ export default function Home() {
   });
 
   const onSubmit = (data: z.infer<typeof formSchema>) => {
-    // Handle form submission logic here
-    console.log("Form submitted:", data);
+    // Create a span for form submission
+    const span = tracer.startSpan("form.submit");
+
+    try {
+      // Set span in context
+      trace.setSpan(context.active(), span);
+
+      // Add span attributes
+      span.setAttributes({
+        "form.interest": data.interest,
+        "form.firstName": data.firstName,
+        "form.lastName": data.lastName,
+        "form.email": data.email,
+        "form.messageLength": data.message.length,
+        "form.termsAccepted": data.terms,
+      });
+
+      // Handle form submission logic here
+      console.log("Form submitted:", data);
+
+      // Log successful submission
+      if (loggerRef.current) {
+        loggerRef.current.emit({
+          severityNumber: SeverityNumber.INFO,
+          severityText: "INFO",
+          body: "Form submitted successfully",
+          attributes: {
+            interest: data.interest,
+            email: data.email,
+            messageLength: data.message.length,
+          },
+        });
+      }
+
+      span.setStatus({ code: SpanStatusCode.OK });
+    } catch (error) {
+      // Log error
+      if (loggerRef.current) {
+        loggerRef.current.emit({
+          severityNumber: SeverityNumber.ERROR,
+          severityText: "ERROR",
+          body: "Form submission failed",
+          attributes: { error: (error as Error).message },
+        });
+      }
+
+      span.setStatus({
+        code: SpanStatusCode.ERROR,
+        message: (error as Error).message
+      });
+      span.recordException(error as Error);
+    } finally {
+      span.end();
+    }
   };
 
   return (
