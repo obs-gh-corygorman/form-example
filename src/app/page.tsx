@@ -3,6 +3,8 @@
 import { useForm } from "react-hook-form";
 import { z } from "zod";
 import { zodResolver } from "@hookform/resolvers/zod";
+import { trace } from "@opentelemetry/api";
+import { logs as logsApi, SeverityNumber } from "@opentelemetry/api-logs";
 
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -54,8 +56,79 @@ export default function Home() {
   });
 
   const onSubmit = (data: z.infer<typeof formSchema>) => {
-    // Handle form submission logic here
-    console.log("Form submitted:", data);
+    // Create a tracer for this component
+    const tracer = trace.getTracer("form-example-client");
+    const logger = logsApi.getLogger("form-example-client");
+
+    // Start a span for form submission
+    const span = tracer.startSpan("form.submit", {
+      attributes: {
+        "form.interest": data.interest,
+        "form.email_domain": data.email.split("@")[1] || "unknown",
+        "form.message_length": data.message.length,
+        "form.terms_accepted": data.terms,
+      },
+    });
+
+    try {
+      // Log form submission start
+      logger.emit({
+        severityNumber: SeverityNumber.INFO,
+        severityText: "INFO",
+        body: "Form submission started",
+        attributes: {
+          "user.email": data.email,
+          "user.firstName": data.firstName,
+          "user.lastName": data.lastName,
+          "form.interest": data.interest,
+          "form.message_length": data.message.length,
+        },
+      });
+
+      // Handle form submission logic here
+      console.log("Form submitted:", data);
+
+      // Simulate some processing time
+      const processingStart = Date.now();
+
+      // Add processing time as span attribute
+      span.setAttributes({
+        "form.processing_time_ms": Date.now() - processingStart,
+        "form.submission_status": "success",
+      });
+
+      // Log successful submission
+      logger.emit({
+        severityNumber: SeverityNumber.INFO,
+        severityText: "INFO",
+        body: "Form submission completed successfully",
+        attributes: {
+          "user.email": data.email,
+          "form.submission_status": "success",
+          "form.processing_time_ms": Date.now() - processingStart,
+        },
+      });
+
+      span.setStatus({ code: 1 }); // OK status
+    } catch (error) {
+      // Log error
+      logger.emit({
+        severityNumber: SeverityNumber.ERROR,
+        severityText: "ERROR",
+        body: "Form submission failed",
+        attributes: {
+          "user.email": data.email,
+          "error.message": (error as Error).message,
+          "form.submission_status": "error",
+        },
+      });
+
+      span.recordException(error as Error);
+      span.setStatus({ code: 2, message: (error as Error).message }); // ERROR status
+      throw error;
+    } finally {
+      span.end();
+    }
   };
 
   return (
