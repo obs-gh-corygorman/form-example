@@ -1,8 +1,11 @@
 "use client";
 
 import { useForm } from "react-hook-form";
+import { useEffect } from "react";
 import { z } from "zod";
 import { zodResolver } from "@hookform/resolvers/zod";
+import { trace, context, SpanStatusCode } from "@opentelemetry/api";
+import { logs, SeverityNumber } from "@opentelemetry/api-logs";
 
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -53,9 +56,109 @@ export default function Home() {
     reValidateMode: "onSubmit",
   });
 
+  // Track form validation errors
+  useEffect(() => {
+    const errors = form.formState.errors;
+    if (Object.keys(errors).length > 0) {
+      const logger = logs.getLogger("form-example-client");
+      const tracer = trace.getTracer("form-example-client");
+
+      const span = tracer.startSpan("form.validation_error", {
+        attributes: {
+          "form.error_count": Object.keys(errors).length,
+          "form.error_fields": Object.keys(errors).join(","),
+        },
+      });
+
+      logger.emit({
+        severityNumber: SeverityNumber.WARN,
+        severityText: "WARN",
+        body: "Form validation errors detected",
+        attributes: {
+          "form.error_count": Object.keys(errors).length,
+          "form.error_fields": Object.keys(errors).join(","),
+          "form.errors": JSON.stringify(errors),
+        },
+      });
+
+      span.end();
+    }
+  }, [form.formState.errors]);
+
   const onSubmit = (data: z.infer<typeof formSchema>) => {
-    // Handle form submission logic here
-    console.log("Form submitted:", data);
+    // Get tracer and logger for instrumentation
+    const tracer = trace.getTracer("form-example-client");
+    const logger = logs.getLogger("form-example-client");
+
+    // Create a span for form submission
+    const span = tracer.startSpan("form.submit", {
+      attributes: {
+        "form.interest": data.interest,
+        "form.message_length": data.message.length,
+        "form.terms_accepted": data.terms,
+        "user.first_name": data.firstName,
+        "user.last_name": data.lastName,
+        "user.email": data.email,
+      },
+    });
+
+    try {
+      // Set span in context
+      trace.setSpan(context.active(), span);
+
+      // Log form submission start
+      logger.emit({
+        severityNumber: SeverityNumber.INFO,
+        severityText: "INFO",
+        body: "Form submission started",
+        attributes: {
+          "form.interest": data.interest,
+          "form.message_length": data.message.length,
+          "form.terms_accepted": data.terms,
+          "user.email": data.email,
+        },
+      });
+
+      // Handle form submission logic here
+      console.log("Form submitted:", data);
+
+      // Mark span as successful
+      span.setStatus({ code: SpanStatusCode.OK });
+
+      // Log successful submission
+      logger.emit({
+        severityNumber: SeverityNumber.INFO,
+        severityText: "INFO",
+        body: "Form submitted successfully",
+        attributes: {
+          "form.interest": data.interest,
+          "user.email": data.email,
+        },
+      });
+    } catch (error) {
+      // Handle errors
+      span.setStatus({
+        code: SpanStatusCode.ERROR,
+        message: error instanceof Error ? error.message : "Unknown error"
+      });
+      span.recordException(error instanceof Error ? error : new Error(String(error)));
+
+      // Log error
+      logger.emit({
+        severityNumber: SeverityNumber.ERROR,
+        severityText: "ERROR",
+        body: "Form submission failed",
+        attributes: {
+          "error.message": error instanceof Error ? error.message : String(error),
+          "form.interest": data.interest,
+          "user.email": data.email,
+        },
+      });
+
+      throw error;
+    } finally {
+      span.end();
+    }
   };
 
   return (
