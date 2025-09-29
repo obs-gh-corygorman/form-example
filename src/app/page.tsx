@@ -3,6 +3,9 @@
 import { useForm } from "react-hook-form";
 import { z } from "zod";
 import { zodResolver } from "@hookform/resolvers/zod";
+import { useEffect, useState } from "react";
+import { trace, context, SpanStatusCode, Tracer, Meter } from "@opentelemetry/api";
+import { SeverityNumber, Logger } from "@opentelemetry/api-logs";
 
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -26,6 +29,31 @@ import { Textarea } from "@/components/ui/textarea";
 import { Checkbox } from "@/components/ui/checkbox";
 
 export default function Home() {
+  // OpenTelemetry state
+  const [telemetry, setTelemetry] = useState<{
+    tracer: Tracer;
+    logger: Logger;
+    meter: Meter;
+  } | null>(null);
+
+  // Initialize telemetry objects when component mounts
+  useEffect(() => {
+    if (typeof window !== "undefined") {
+      // Wait a bit for OpenTelemetry to initialize
+      const timer = setTimeout(() => {
+        try {
+          import("../../otel-client").then(({ tracer, logger, meter }) => {
+            setTelemetry({ tracer, logger, meter });
+          });
+        } catch (error) {
+          console.error("Failed to load OpenTelemetry client:", error);
+        }
+      }, 100);
+
+      return () => clearTimeout(timer);
+    }
+  }, []);
+
   const formSchema = z.object({
     firstName: z.string().min(1, "First name is required"),
     lastName: z.string().min(1, "Last name is required"),
@@ -54,8 +82,92 @@ export default function Home() {
   });
 
   const onSubmit = (data: z.infer<typeof formSchema>) => {
-    // Handle form submission logic here
-    console.log("Form submitted:", data);
+    const startTime = Date.now();
+
+    // Create a span for form submission if telemetry is available
+    if (telemetry?.tracer) {
+      const span = telemetry.tracer.startSpan("form.submit");
+
+      try {
+        // Set span in context
+        trace.setSpan(context.active(), span);
+
+        // Add span attributes
+        span.setAttributes({
+          "form.firstName": data.firstName,
+          "form.lastName": data.lastName,
+          "form.email": data.email,
+          "form.interest": data.interest,
+          "form.messageLength": data.message.length,
+          "form.termsAccepted": data.terms,
+        });
+
+        // Log form submission
+        if (telemetry.logger) {
+          telemetry.logger.emit({
+            severityNumber: SeverityNumber.INFO,
+            severityText: "INFO",
+            body: "Form submitted successfully",
+            attributes: {
+              "user.email": data.email,
+              "user.interest": data.interest,
+              "form.messageLength": data.message.length,
+              "duration.ms": Date.now() - startTime,
+            },
+          });
+        }
+
+        // Record metrics
+        if (telemetry.meter) {
+          const formSubmissionCounter = telemetry.meter.createCounter("form_submissions_total", {
+            description: "Total number of form submissions",
+          });
+
+          const formSubmissionDuration = telemetry.meter.createHistogram("form_submission_duration_ms", {
+            description: "Duration of form submission processing",
+          });
+
+          formSubmissionCounter.add(1, {
+            interest: data.interest,
+            status: "success",
+          });
+
+          formSubmissionDuration.record(Date.now() - startTime, {
+            interest: data.interest,
+          });
+        }
+
+        // Handle form submission logic here
+        console.log("Form submitted:", data);
+
+        span.setStatus({ code: SpanStatusCode.OK });
+      } catch (error) {
+        // Handle errors
+        span.setStatus({
+          code: SpanStatusCode.ERROR,
+          message: error instanceof Error ? error.message : "Unknown error"
+        });
+
+        if (telemetry.logger) {
+          telemetry.logger.emit({
+            severityNumber: SeverityNumber.ERROR,
+            severityText: "ERROR",
+            body: "Form submission failed",
+            attributes: {
+              error: error instanceof Error ? error.message : "Unknown error",
+              "user.email": data.email,
+            },
+          });
+        }
+
+        throw error;
+      } finally {
+        span.end();
+      }
+    } else {
+      // Fallback if telemetry is not available
+      console.log("Form submitted:", data);
+    }
   };
 
   return (
