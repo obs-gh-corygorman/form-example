@@ -3,6 +3,9 @@
 import { useForm } from "react-hook-form";
 import { z } from "zod";
 import { zodResolver } from "@hookform/resolvers/zod";
+import { trace, metrics } from "@opentelemetry/api";
+import { logs, SeverityNumber } from "@opentelemetry/api-logs";
+import { useEffect } from "react";
 
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -26,6 +29,25 @@ import { Textarea } from "@/components/ui/textarea";
 import { Checkbox } from "@/components/ui/checkbox";
 
 export default function Home() {
+  // Initialize OpenTelemetry components
+  const tracer = trace.getTracer("form-example-client");
+  const meter = metrics.getMeter("form-example-client");
+  const logger = logs.getLogger("form-example-client");
+
+  // Create metrics
+  const formSubmissionCounter = meter.createCounter("form_submissions_total", {
+    description: "Total number of form submissions",
+  });
+
+  const formValidationErrorCounter = meter.createCounter("form_validation_errors_total", {
+    description: "Total number of form validation errors",
+  });
+
+  const formSubmissionDuration = meter.createHistogram("form_submission_duration_ms", {
+    description: "Duration of form submission processing",
+    unit: "ms",
+  });
+
   const formSchema = z.object({
     firstName: z.string().min(1, "First name is required"),
     lastName: z.string().min(1, "Last name is required"),
@@ -53,9 +75,113 @@ export default function Home() {
     reValidateMode: "onSubmit",
   });
 
+  // Monitor form validation errors
+  useEffect(() => {
+    const errors = form.formState.errors;
+    const errorCount = Object.keys(errors).length;
+
+    if (errorCount > 0) {
+      // Record validation errors
+      formValidationErrorCounter.add(errorCount);
+
+      // Log validation errors
+      logger.emit({
+        severityNumber: SeverityNumber.WARN,
+        severityText: "WARN",
+        body: "Form validation errors detected",
+        attributes: {
+          "validation.error_count": errorCount,
+          "validation.error_fields": Object.keys(errors).join(", "),
+        },
+      });
+
+      // Create span for validation errors
+      const span = tracer.startSpan("form_validation_error", {
+        attributes: {
+          "validation.error_count": errorCount,
+          "validation.error_fields": Object.keys(errors).join(", "),
+        },
+      });
+
+      span.addEvent("validation_errors_detected", {
+        "error.fields": Object.keys(errors).join(", "),
+      });
+
+      span.end();
+    }
+  }, [form.formState.errors, formValidationErrorCounter, logger, tracer]);
+
   const onSubmit = (data: z.infer<typeof formSchema>) => {
-    // Handle form submission logic here
-    console.log("Form submitted:", data);
+    const startTime = Date.now();
+
+    // Create a span for form submission
+    const span = tracer.startSpan("form_submission", {
+      attributes: {
+        "form.interest": data.interest,
+        "form.message_length": data.message.length,
+        "form.terms_accepted": data.terms,
+      },
+    });
+
+    try {
+      // Log form submission
+      logger.emit({
+        severityNumber: SeverityNumber.INFO,
+        severityText: "INFO",
+        body: "Form submission started",
+        attributes: {
+          "user.firstName": data.firstName,
+          "user.lastName": data.lastName,
+          "user.email": data.email,
+          "form.interest": data.interest,
+          "form.message_length": data.message.length,
+        },
+      });
+
+      // Handle form submission logic here
+      console.log("Form submitted:", data);
+
+      // Record successful submission
+      formSubmissionCounter.add(1, { status: "success", interest: data.interest });
+
+      span.setStatus({ code: 1 }); // OK status
+      span.addEvent("form_submitted_successfully");
+
+      logger.emit({
+        severityNumber: SeverityNumber.INFO,
+        severityText: "INFO",
+        body: "Form submission completed successfully",
+        attributes: {
+          "form.interest": data.interest,
+          "submission.duration_ms": Date.now() - startTime,
+        },
+      });
+
+    } catch (error) {
+      // Record failed submission
+      formSubmissionCounter.add(1, { status: "error", interest: data.interest });
+
+      span.setStatus({ code: 2, message: (error as Error).message }); // ERROR status
+      span.recordException(error as Error);
+
+      logger.emit({
+        severityNumber: SeverityNumber.ERROR,
+        severityText: "ERROR",
+        body: "Form submission failed",
+        attributes: {
+          error: (error as Error).message,
+          "form.interest": data.interest,
+        },
+      });
+
+      throw error;
+    } finally {
+      // Record submission duration
+      const duration = Date.now() - startTime;
+      formSubmissionDuration.record(duration, { interest: data.interest });
+
+      span.end();
+    }
   };
 
   return (
