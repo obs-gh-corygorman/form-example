@@ -3,6 +3,8 @@
 import { useForm } from "react-hook-form";
 import { z } from "zod";
 import { zodResolver } from "@hookform/resolvers/zod";
+import { SpanStatusCode } from "@opentelemetry/api";
+import { SeverityNumber } from "@opentelemetry/api-logs";
 
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -24,8 +26,11 @@ import {
 } from "@/components/ui/form";
 import { Textarea } from "@/components/ui/textarea";
 import { Checkbox } from "@/components/ui/checkbox";
+import { useOtel } from "@/hooks/use-otel";
 
 export default function Home() {
+  const otel = useOtel();
+
   const formSchema = z.object({
     firstName: z.string().min(1, "First name is required"),
     lastName: z.string().min(1, "Last name is required"),
@@ -54,8 +59,116 @@ export default function Home() {
   });
 
   const onSubmit = (data: z.infer<typeof formSchema>) => {
-    // Handle form submission logic here
-    console.log("Form submitted:", data);
+    const startTime = Date.now();
+
+    // Create a span for form submission if OpenTelemetry is available
+    if (otel?.tracer) {
+      const span = otel.tracer.startSpan("form.submit");
+
+      try {
+        // Set span attributes
+        span.setAttributes({
+          "form.interest": data.interest,
+          "form.message_length": data.message.length,
+          "form.terms_accepted": data.terms,
+          "user.first_name": data.firstName,
+          "user.last_name": data.lastName,
+          "user.email": data.email,
+        });
+
+        // Log form submission
+        if (otel.logger) {
+          otel.logger.emit({
+            severityNumber: SeverityNumber.INFO,
+            severityText: "INFO",
+            body: "Form submission started",
+            attributes: {
+              "form.interest": data.interest,
+              "form.message_length": data.message.length,
+              "user.email": data.email,
+            },
+          });
+        }
+
+        // Handle form submission logic here
+        console.log("Form submitted:", data);
+
+        // Record success metrics
+        if (otel.meter) {
+          const formSubmissionCounter = otel.meter.createCounter("form_submissions_total", {
+            description: "Total number of form submissions",
+          });
+          const formSubmissionDuration = otel.meter.createHistogram("form_submission_duration_ms", {
+            description: "Duration of form submissions in milliseconds",
+          });
+
+          formSubmissionCounter.add(1, {
+            interest: data.interest,
+            status: "success",
+          });
+
+          formSubmissionDuration.record(Date.now() - startTime, {
+            interest: data.interest,
+            status: "success",
+          });
+        }
+
+        // Set span status to OK
+        span.setStatus({ code: SpanStatusCode.OK });
+
+        // Log successful submission
+        if (otel.logger) {
+          otel.logger.emit({
+            severityNumber: SeverityNumber.INFO,
+            severityText: "INFO",
+            body: "Form submission completed successfully",
+            attributes: {
+              "form.interest": data.interest,
+              "duration_ms": Date.now() - startTime,
+            },
+          });
+        }
+      } catch (error) {
+        // Handle errors and record them in the span
+        span.setStatus({
+          code: SpanStatusCode.ERROR,
+          message: error instanceof Error ? error.message : "Unknown error"
+        });
+        span.recordException(error instanceof Error ? error : new Error(String(error)));
+
+        // Log error
+        if (otel.logger) {
+          otel.logger.emit({
+            severityNumber: SeverityNumber.ERROR,
+            severityText: "ERROR",
+            body: "Form submission failed",
+            attributes: {
+              error: error instanceof Error ? error.message : String(error),
+              "form.interest": data.interest,
+            },
+          });
+        }
+
+        // Record error metrics
+        if (otel.meter) {
+          const formSubmissionCounter = otel.meter.createCounter("form_submissions_total", {
+            description: "Total number of form submissions",
+          });
+
+          formSubmissionCounter.add(1, {
+            interest: data.interest,
+            status: "error",
+          });
+        }
+
+        throw error;
+      } finally {
+        span.end();
+      }
+    } else {
+      // Fallback when OpenTelemetry is not available
+      console.log("Form submitted:", data);
+    }
   };
 
   return (
