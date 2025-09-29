@@ -2,6 +2,30 @@ Live site: https://sarzzble.github.io/form-example/
 
 This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
 
+## OpenTelemetry Instrumentation
+
+This application is instrumented with OpenTelemetry for comprehensive observability including:
+
+- **Distributed Tracing**: Automatic and custom spans for form interactions
+- **Metrics**: Form submission counters, validation error tracking, and performance metrics
+- **Structured Logging**: Correlated logs with trace context for debugging
+
+### Environment Variables
+
+The following environment variables are required for OpenTelemetry:
+
+```bash
+# Server-side (automatically available in production)
+OTEL_EXPORTER_OTLP_ENDPOINT=https://your-observe-endpoint.com
+OTEL_EXPORTER_OTLP_BEARER_TOKEN=your-bearer-token-here
+
+# Client-side (for browser telemetry)
+NEXT_PUBLIC_OTEL_EXPORTER_OTLP_ENDPOINT=https://your-observe-endpoint.com
+NEXT_PUBLIC_OTEL_EXPORTER_OTLP_BEARER_TOKEN=your-bearer-token-here
+```
+
+Copy `.env.local.example` to `.env.local` and configure your endpoints.
+
 ## Getting Started
 
 First, run the development server:
