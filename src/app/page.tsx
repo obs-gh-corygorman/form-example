@@ -3,6 +3,9 @@
 import { useForm } from "react-hook-form";
 import { z } from "zod";
 import { zodResolver } from "@hookform/resolvers/zod";
+import { trace, metrics } from "@opentelemetry/api";
+import { logs, SeverityNumber } from "@opentelemetry/api-logs";
+import { useEffect } from "react";
 
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -26,6 +29,24 @@ import { Textarea } from "@/components/ui/textarea";
 import { Checkbox } from "@/components/ui/checkbox";
 
 export default function Home() {
+  // OpenTelemetry instrumentation setup
+  const tracer = trace.getTracer("form-example-client");
+  const meter = metrics.getMeter("form-example-client");
+  const logger = logs.getLogger("form-example-client");
+
+  // Metrics
+  const formSubmissionCounter = meter.createCounter("form_submissions_total", {
+    description: "Total number of form submissions",
+  });
+
+  const formValidationErrorCounter = meter.createCounter("form_validation_errors_total", {
+    description: "Total number of form validation errors",
+  });
+
+  const formFieldInteractionCounter = meter.createCounter("form_field_interactions_total", {
+    description: "Total number of form field interactions",
+  });
+
   const formSchema = z.object({
     firstName: z.string().min(1, "First name is required"),
     lastName: z.string().min(1, "Last name is required"),
@@ -53,9 +74,89 @@ export default function Home() {
     reValidateMode: "onSubmit",
   });
 
+  // Track form validation errors
+  useEffect(() => {
+    const errors = form.formState.errors;
+    const errorCount = Object.keys(errors).length;
+
+    if (errorCount > 0) {
+      formValidationErrorCounter.add(errorCount, {
+        error_fields: Object.keys(errors).join(","),
+      });
+
+      logger.emit({
+        severityNumber: SeverityNumber.WARN,
+        severityText: "WARN",
+        body: "Form validation errors occurred",
+        attributes: {
+          error_count: errorCount,
+          error_fields: Object.keys(errors).join(","),
+          errors: JSON.stringify(errors),
+        },
+      });
+    }
+  }, [form.formState.errors, formValidationErrorCounter, logger]);
+
   const onSubmit = (data: z.infer<typeof formSchema>) => {
-    // Handle form submission logic here
-    console.log("Form submitted:", data);
+    const span = tracer.startSpan("form_submission");
+
+    try {
+      // Add span attributes
+      span.setAttributes({
+        "form.interest": data.interest,
+        "form.message_length": data.message.length,
+        "form.terms_accepted": data.terms,
+        "user.first_name": data.firstName,
+        "user.last_name": data.lastName,
+        "user.email": data.email,
+      });
+
+      // Record metrics
+      formSubmissionCounter.add(1, {
+        interest: data.interest,
+        terms_accepted: data.terms.toString(),
+      });
+
+      // Log the submission
+      logger.emit({
+        severityNumber: SeverityNumber.INFO,
+        severityText: "INFO",
+        body: "Form submitted successfully",
+        attributes: {
+          interest: data.interest,
+          message_length: data.message.length,
+          terms_accepted: data.terms,
+          submission_timestamp: new Date().toISOString(),
+        },
+      });
+
+      // Handle form submission logic here
+      console.log("Form submitted:", data);
+
+      span.setStatus({ code: 1 }); // OK status
+    } catch (error) {
+      span.recordException(error as Error);
+      span.setStatus({ code: 2, message: (error as Error).message }); // ERROR status
+
+      logger.emit({
+        severityNumber: SeverityNumber.ERROR,
+        severityText: "ERROR",
+        body: "Form submission failed",
+        attributes: {
+          error: (error as Error).message,
+        },
+      });
+    } finally {
+      span.end();
+    }
+  };
+
+  // Helper function to track field interactions
+  const trackFieldInteraction = (fieldName: string, action: string) => {
+    formFieldInteractionCounter.add(1, {
+      field_name: fieldName,
+      action: action,
+    });
   };
 
   return (
@@ -83,6 +184,12 @@ export default function Home() {
                       <Input
                         {...field}
                         className="border-blue-200 text-blue-400 focus:border-blue-400"
+                        onFocus={() => trackFieldInteraction("firstName", "focus")}
+                        onBlur={() => trackFieldInteraction("firstName", "blur")}
+                        onChange={(e) => {
+                          field.onChange(e);
+                          trackFieldInteraction("firstName", "change");
+                        }}
                       />
                     </FormControl>
                     <FormMessage className="text-red-500" />
