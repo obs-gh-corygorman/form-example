@@ -3,6 +3,9 @@
 import { useForm } from "react-hook-form";
 import { z } from "zod";
 import { zodResolver } from "@hookform/resolvers/zod";
+import { useEffect, useRef } from "react";
+import { trace, context, SpanStatusCode, metrics } from "@opentelemetry/api";
+import { logs, SeverityNumber } from "@opentelemetry/api-logs";
 
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -26,6 +29,24 @@ import { Textarea } from "@/components/ui/textarea";
 import { Checkbox } from "@/components/ui/checkbox";
 
 export default function Home() {
+  // Initialize OpenTelemetry components
+  const tracer = useRef(trace.getTracer("form-example-client"));
+  const logger = useRef(logs.getLogger("form-example-client"));
+  const meter = useRef(metrics.getMeter("form-example-client"));
+
+  // Initialize metrics
+  const formSubmissionCounter = useRef(
+    meter.current.createCounter("form_submissions_total", {
+      description: "Total number of form submissions",
+    })
+  );
+
+  const formValidationErrorCounter = useRef(
+    meter.current.createCounter("form_validation_errors_total", {
+      description: "Total number of form validation errors",
+    })
+  );
+
   const formSchema = z.object({
     firstName: z.string().min(1, "First name is required"),
     lastName: z.string().min(1, "Last name is required"),
@@ -53,9 +74,140 @@ export default function Home() {
     reValidateMode: "onSubmit",
   });
 
+  // Track component lifecycle
+  useEffect(() => {
+    const span = tracer.current.startSpan("form.component_mounted");
+
+    try {
+      logger.current.emit({
+        severityNumber: SeverityNumber.INFO,
+        severityText: "INFO",
+        body: "Form component mounted",
+      });
+
+      span.setStatus({ code: SpanStatusCode.OK });
+    } catch (error) {
+      span.setStatus({
+        code: SpanStatusCode.ERROR,
+        message: error instanceof Error ? error.message : "Unknown error"
+      });
+    } finally {
+      span.end();
+    }
+  }, []);
+
+  // Track form validation errors
+  useEffect(() => {
+    const errors = form.formState.errors;
+    const errorCount = Object.keys(errors).length;
+
+    if (errorCount > 0) {
+      const span = tracer.current.startSpan("form.validation_error");
+
+      try {
+        // Set span attributes
+        span.setAttributes({
+          "form.error_count": errorCount,
+          "form.error_fields": Object.keys(errors).join(","),
+        });
+
+        // Log validation errors
+        logger.current.emit({
+          severityNumber: SeverityNumber.WARN,
+          severityText: "WARN",
+          body: "Form validation errors occurred",
+          attributes: {
+            "form.error_count": errorCount,
+            "form.error_fields": Object.keys(errors).join(","),
+            "form.errors": JSON.stringify(errors),
+          },
+        });
+
+        // Increment error counter
+        formValidationErrorCounter.current.add(errorCount, {
+          error_fields: Object.keys(errors).join(","),
+        });
+
+        span.setStatus({ code: SpanStatusCode.OK });
+      } catch (error) {
+        span.setStatus({
+          code: SpanStatusCode.ERROR,
+          message: error instanceof Error ? error.message : "Unknown error"
+        });
+      } finally {
+        span.end();
+      }
+    }
+  }, [form.formState.errors]);
+
   const onSubmit = (data: z.infer<typeof formSchema>) => {
-    // Handle form submission logic here
-    console.log("Form submitted:", data);
+    const span = tracer.current.startSpan("form.submit");
+
+    try {
+      // Set span in context
+      trace.setSpan(context.active(), span);
+
+      // Add span attributes
+      span.setAttributes({
+        "form.interest": data.interest,
+        "form.message_length": data.message.length,
+        "form.terms_accepted": data.terms,
+        "user.first_name": data.firstName,
+        "user.last_name": data.lastName,
+        "user.email": data.email,
+      });
+
+      // Log form submission
+      logger.current.emit({
+        severityNumber: SeverityNumber.INFO,
+        severityText: "INFO",
+        body: "Form submitted successfully",
+        attributes: {
+          "form.interest": data.interest,
+          "form.message_length": data.message.length,
+          "user.email": data.email,
+        },
+      });
+
+      // Increment success counter
+      formSubmissionCounter.current.add(1, {
+        status: "success",
+        interest: data.interest,
+      });
+
+      // Handle form submission logic here
+      console.log("Form submitted:", data);
+
+      span.setStatus({ code: SpanStatusCode.OK });
+    } catch (error) {
+      // Handle errors
+      span.setStatus({
+        code: SpanStatusCode.ERROR,
+        message: error instanceof Error ? error.message : "Unknown error"
+      });
+
+      if (error instanceof Error) {
+        span.recordException(error);
+      }
+
+      logger.current.emit({
+        severityNumber: SeverityNumber.ERROR,
+        severityText: "ERROR",
+        body: "Form submission failed",
+        attributes: {
+          error: error instanceof Error ? error.message : "Unknown error",
+        },
+      });
+
+      formSubmissionCounter.current.add(1, {
+        status: "error",
+        interest: data.interest,
+      });
+
+      throw error;
+    } finally {
+      span.end();
+    }
   };
 
   return (
