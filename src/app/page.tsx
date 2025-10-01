@@ -3,6 +3,9 @@
 import { useForm } from "react-hook-form";
 import { z } from "zod";
 import { zodResolver } from "@hookform/resolvers/zod";
+import { trace, metrics } from "@opentelemetry/api";
+import { logs, SeverityNumber } from "@opentelemetry/api-logs";
+import { useEffect, useRef } from "react";
 
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -26,6 +29,30 @@ import { Textarea } from "@/components/ui/textarea";
 import { Checkbox } from "@/components/ui/checkbox";
 
 export default function Home() {
+  // OpenTelemetry instrumentation setup
+  const tracer = trace.getTracer("form-example-client");
+  const meter = metrics.getMeter("form-example-client");
+  const logger = logs.getLogger("form-example-client");
+
+  // Metrics
+  const formSubmissionCounter = useRef(
+    meter.createCounter("form_submissions_total", {
+      description: "Total number of form submissions",
+    })
+  );
+
+  const formValidationErrorCounter = useRef(
+    meter.createCounter("form_validation_errors_total", {
+      description: "Total number of form validation errors",
+    })
+  );
+
+  const formSubmissionDuration = useRef(
+    meter.createHistogram("form_submission_duration_ms", {
+      description: "Duration of form submission process in milliseconds",
+    })
+  );
+
   const formSchema = z.object({
     firstName: z.string().min(1, "First name is required"),
     lastName: z.string().min(1, "Last name is required"),
@@ -53,9 +80,91 @@ export default function Home() {
     reValidateMode: "onSubmit",
   });
 
+  // Track form validation errors
+  useEffect(() => {
+    const errors = form.formState.errors;
+    const errorCount = Object.keys(errors).length;
+
+    if (errorCount > 0) {
+      formValidationErrorCounter.current.add(errorCount, {
+        fields: Object.keys(errors).join(","),
+      });
+
+      logger.emit({
+        severityNumber: SeverityNumber.WARN,
+        severityText: "WARN",
+        body: "Form validation errors detected",
+        attributes: {
+          "validation.error_count": errorCount,
+          "validation.error_fields": Object.keys(errors).join(","),
+        },
+      });
+    }
+  }, [form.formState.errors, formValidationErrorCounter, logger]);
+
   const onSubmit = (data: z.infer<typeof formSchema>) => {
-    // Handle form submission logic here
-    console.log("Form submitted:", data);
+    const startTime = Date.now();
+
+    // Create a span for form submission
+    const span = tracer.startSpan("form_submission", {
+      attributes: {
+        "form.interest": data.interest,
+        "form.message_length": data.message.length,
+        "form.terms_accepted": data.terms,
+      },
+    });
+
+    try {
+      // Log form submission
+      logger.emit({
+        severityNumber: SeverityNumber.INFO,
+        severityText: "INFO",
+        body: "Form submitted successfully",
+        attributes: {
+          "user.firstName": data.firstName,
+          "user.lastName": data.lastName,
+          "user.email": data.email,
+          "form.interest": data.interest,
+          "form.message_length": data.message.length,
+        },
+      });
+
+      // Handle form submission logic here
+      console.log("Form submitted:", data);
+
+      // Record successful submission
+      formSubmissionCounter.current.add(1, {
+        status: "success",
+        interest: data.interest,
+      });
+
+      span.setStatus({ code: 1 }); // OK status
+    } catch (error) {
+      // Record failed submission
+      formSubmissionCounter.current.add(1, {
+        status: "error",
+        interest: data.interest,
+      });
+
+      logger.emit({
+        severityNumber: SeverityNumber.ERROR,
+        severityText: "ERROR",
+        body: "Form submission failed",
+        attributes: {
+          error: (error as Error).message,
+        },
+      });
+
+      span.recordException(error as Error);
+      span.setStatus({ code: 2, message: (error as Error).message }); // ERROR status
+    } finally {
+      const duration = Date.now() - startTime;
+      formSubmissionDuration.current.record(duration, {
+        interest: data.interest,
+      });
+
+      span.end();
+    }
   };
 
   return (
