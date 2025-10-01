@@ -3,6 +3,8 @@
 import { useForm } from "react-hook-form";
 import { z } from "zod";
 import { zodResolver } from "@hookform/resolvers/zod";
+import { trace } from "@opentelemetry/api";
+import { logs as logsApi, SeverityNumber } from "@opentelemetry/api-logs";
 
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -54,8 +56,73 @@ export default function Home() {
   });
 
   const onSubmit = (data: z.infer<typeof formSchema>) => {
-    // Handle form submission logic here
-    console.log("Form submitted:", data);
+    // Create a tracer for form submission
+    const tracer = trace.getTracer("form-example-nextjs-client");
+    const logger = logsApi.getLogger("form-example-nextjs-client");
+
+    // Start a span for form submission
+    const span = tracer.startSpan("form.submit", {
+      attributes: {
+        "form.type": "contact_form",
+        "form.interest": data.interest,
+        "form.firstName.length": data.firstName.length,
+        "form.lastName.length": data.lastName.length,
+        "form.message.length": data.message.length,
+        "form.terms.accepted": data.terms,
+      },
+    });
+
+    try {
+      // Log form submission event
+      logger.emit({
+        severityNumber: SeverityNumber.INFO,
+        severityText: "INFO",
+        body: "Form submission started",
+        attributes: {
+          "form.interest": data.interest,
+          "form.firstName": data.firstName,
+          "form.lastName": data.lastName,
+          "form.email": data.email,
+          "form.message.length": data.message.length,
+          "form.terms.accepted": data.terms,
+        },
+      });
+
+      // Handle form submission logic here
+      console.log("Form submitted:", data);
+
+      // Mark span as successful
+      span.setStatus({ code: 1 }); // OK status
+      span.addEvent("form.submission.completed");
+
+      // Log successful submission
+      logger.emit({
+        severityNumber: SeverityNumber.INFO,
+        severityText: "INFO",
+        body: "Form submission completed successfully",
+        attributes: {
+          "form.interest": data.interest,
+        },
+      });
+    } catch (error) {
+      // Handle errors
+      span.recordException(error as Error);
+      span.setStatus({ code: 2, message: (error as Error).message }); // ERROR status
+
+      logger.emit({
+        severityNumber: SeverityNumber.ERROR,
+        severityText: "ERROR",
+        body: "Form submission failed",
+        attributes: {
+          "error.message": (error as Error).message,
+          "form.interest": data.interest,
+        },
+      });
+
+      throw error;
+    } finally {
+      span.end();
+    }
   };
 
   return (
