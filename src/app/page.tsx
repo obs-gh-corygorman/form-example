@@ -3,6 +3,9 @@
 import { useForm } from "react-hook-form";
 import { z } from "zod";
 import { zodResolver } from "@hookform/resolvers/zod";
+import { useEffect, useState } from "react";
+import type { Logger } from "@opentelemetry/api-logs";
+import type { Counter } from "@opentelemetry/api";
 
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -26,6 +29,24 @@ import { Textarea } from "@/components/ui/textarea";
 import { Checkbox } from "@/components/ui/checkbox";
 
 export default function Home() {
+  const [logger, setLogger] = useState<Logger | null>(null);
+  const [formSubmissionCounter, setFormSubmissionCounter] = useState<Counter | null>(null);
+
+  useEffect(() => {
+    // Initialize OpenTelemetry client-side logging and metrics
+    if (typeof window !== "undefined") {
+      import("../../otel-client").then(({ logger: clientLogger, meter: clientMeter }) => {
+        setLogger(clientLogger);
+
+        // Create a counter for form submissions
+        const counter = clientMeter.createCounter("form_submissions_total", {
+          description: "Total number of form submissions",
+        });
+        setFormSubmissionCounter(counter);
+      });
+    }
+  }, []);
+
   const formSchema = z.object({
     firstName: z.string().min(1, "First name is required"),
     lastName: z.string().min(1, "Last name is required"),
@@ -56,6 +77,34 @@ export default function Home() {
   const onSubmit = (data: z.infer<typeof formSchema>) => {
     // Handle form submission logic here
     console.log("Form submitted:", data);
+
+    // Add OpenTelemetry logging and metrics
+    if (logger) {
+      logger.emit({
+        severityNumber: 9, // INFO
+        severityText: "INFO",
+        body: "Form submitted successfully",
+        attributes: {
+          formData: {
+            firstName: data.firstName,
+            lastName: data.lastName,
+            email: data.email,
+            interest: data.interest,
+            messageLength: data.message.length,
+            termsAccepted: data.terms,
+          },
+          timestamp: new Date().toISOString(),
+        },
+      });
+    }
+
+    // Increment form submission counter
+    if (formSubmissionCounter) {
+      formSubmissionCounter.add(1, {
+        interest: data.interest,
+        status: "success",
+      });
+    }
   };
 
   return (
