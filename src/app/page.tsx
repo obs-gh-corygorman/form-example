@@ -3,6 +3,8 @@
 import { useForm } from "react-hook-form";
 import { z } from "zod";
 import { zodResolver } from "@hookform/resolvers/zod";
+import { trace, SpanStatusCode } from "@opentelemetry/api";
+import { SeverityNumber } from "@opentelemetry/api-logs";
 
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -54,8 +56,67 @@ export default function Home() {
   });
 
   const onSubmit = (data: z.infer<typeof formSchema>) => {
-    // Handle form submission logic here
-    console.log("Form submitted:", data);
+    const tracer = trace.getTracer("form-example-client");
+
+    tracer.startActiveSpan("form.submit", (span) => {
+      try {
+        // Set span attributes for observability
+        span.setAttributes({
+          "form.firstName": data.firstName,
+          "form.lastName": data.lastName,
+          "form.email": data.email,
+          "form.interest": data.interest,
+          "form.messageLength": data.message.length,
+          "form.termsAccepted": data.terms,
+        });
+
+        // Handle form submission logic here
+        console.log("Form submitted:", data);
+
+        // Log the form submission
+        if (typeof window !== "undefined") {
+          import("../../otel-client").then(({ logger }) => {
+            logger.emit({
+              severityNumber: SeverityNumber.INFO,
+              severityText: "INFO",
+              body: "Form submitted successfully",
+              attributes: {
+                firstName: data.firstName,
+                lastName: data.lastName,
+                email: data.email,
+                interest: data.interest,
+                messageLength: data.message.length,
+              },
+            });
+          });
+        }
+
+        span.setStatus({ code: SpanStatusCode.OK });
+      } catch (error) {
+        span.setStatus({
+          code: SpanStatusCode.ERROR,
+          message: error instanceof Error ? error.message : "Unknown error"
+        });
+        span.recordException(error as Error);
+
+        // Log the error
+        if (typeof window !== "undefined") {
+          import("../../otel-client").then(({ logger }) => {
+            logger.emit({
+              severityNumber: SeverityNumber.ERROR,
+              severityText: "ERROR",
+              body: "Form submission failed",
+              attributes: {
+                error: error instanceof Error ? error.message : "Unknown error",
+              },
+            });
+          });
+        }
+        throw error;
+      } finally {
+        span.end();
+      }
+    });
   };
 
   return (
