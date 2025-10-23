@@ -64,6 +64,20 @@ The contact form includes:
 - **Logging**: Structured logs with form data (excluding sensitive information)
 - **Tracing**: Automatic span creation for form submission events
 
+### API Endpoints
+
+#### Health Check (`/api/health`)
+- **Purpose**: Application health monitoring
+- **Metrics**: Request count and duration
+- **Logging**: Health check access and status
+- **Tracing**: Health check spans with status attributes
+
+#### Metrics Endpoint (`/api/metrics`)
+- **Purpose**: Observability validation and metrics demonstration
+- **Metrics**: `api_calls_total` counter and `api_duration_ms` histogram
+- **Logging**: API access logs
+- **Tracing**: API request spans with method and route attributes
+
 ### Automatic Instrumentation
 
 The following are automatically instrumented:
@@ -87,6 +101,8 @@ Traces capture the flow of requests through the application:
 
 Key metrics collected:
 - `form_submissions_total`: Counter for form submissions
+- `api_calls_total`: Counter for API endpoint calls
+- `api_duration_ms`: Histogram for API response times
 - HTTP request duration and count
 - Page load times
 - Error rates
@@ -124,8 +140,11 @@ The application exports telemetry data in OTLP format to the configured endpoint
 ### Testing Observability
 
 1. Submit the form to generate telemetry data
-2. Check your observability backend for:
+2. Visit `/api/health` to test health check instrumentation
+3. Visit `/api/metrics` to test API metrics collection
+4. Check your observability backend for:
    - Form submission traces
+   - API request traces
    - Metrics increments
    - Structured log entries
 
@@ -174,7 +193,11 @@ OTEL_LOG_LEVEL=debug
 - `src/components/otel-client-init.tsx` - Client initialization component
 - `src/app/layout.tsx` - Updated to include client initialization
 - `src/app/page.tsx` - Added form submission instrumentation
+- `src/app/api/health/route.ts` - Health check endpoint with observability
+- `src/app/api/metrics/route.ts` - Metrics demonstration endpoint
 - `package.json` - Added OpenTelemetry dependencies
+- `OBSERVABILITY.md` - This documentation
+- `.env.example` - Environment configuration examples
 
 ## Next Steps
 
