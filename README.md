@@ -2,6 +2,50 @@ Live site: https://sarzzble.github.io/form-example/
 
 This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
 
+## 🔍 Observability
+
+This application is instrumented with OpenTelemetry for comprehensive observability including:
+
+- **Distributed Tracing**: Automatic instrumentation for HTTP requests, form submissions, and API calls
+- **Structured Logging**: JSON-formatted logs with trace correlation
+- **Metrics Collection**: Application performance and business metrics
+- **Health Monitoring**: Health check and metrics endpoints
+
+### OpenTelemetry Configuration
+
+The application uses OpenTelemetry with OTLP exporters for both client-side and server-side telemetry:
+
+- **Server-side**: `otel-server.ts` - Node.js SDK with auto-instrumentation
+- **Client-side**: `otel-client.ts` - Web SDK with browser instrumentation
+- **Instrumentation**: `instrumentation.ts` - Next.js instrumentation hook
+
+### Environment Variables
+
+Configure OpenTelemetry endpoints using environment variables:
+
+```bash
+# Server-side (optional, defaults to http://localhost:4318)
+OTEL_EXPORTER_OTLP_ENDPOINT=http://your-otel-collector:4318
+OTEL_EXPORTER_OTLP_BEARER_TOKEN=your-auth-token
+
+# Client-side (optional, defaults to http://localhost:4318)
+NEXT_PUBLIC_OTEL_EXPORTER_OTLP_ENDPOINT=http://your-otel-collector:4318
+NEXT_PUBLIC_OTEL_EXPORTER_OTLP_BEARER_TOKEN=your-auth-token
+```
+
+### Monitoring Endpoints
+
+- **Health Check**: `/api/health` - Application health status
+- **Metrics**: `/api/metrics` - Basic application metrics
+
+### Instrumented Features
+
+- Form submission tracking with validation metrics
+- Page load performance monitoring
+- API request/response tracing
+- Error tracking and exception handling
+- User interaction analytics
+
 ## Getting Started
 
 First, run the development server:
