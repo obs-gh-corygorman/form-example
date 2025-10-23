@@ -3,6 +3,10 @@
 import { useForm } from "react-hook-form";
 import { z } from "zod";
 import { zodResolver } from "@hookform/resolvers/zod";
+import { trace, SpanStatusCode } from "@opentelemetry/api";
+import { SeverityNumber } from "@opentelemetry/api-logs";
+import { useState, useEffect } from "react";
+import { recordFormSubmission, recordValidationErrors, recordFormCompletionTime } from "@/lib/metrics";
 
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -26,6 +30,12 @@ import { Textarea } from "@/components/ui/textarea";
 import { Checkbox } from "@/components/ui/checkbox";
 
 export default function Home() {
+  // Get OpenTelemetry tracer and logger
+  const tracer = trace.getTracer("form-example-client");
+
+  // Track form start time for completion metrics
+  const [formStartTime] = useState(Date.now());
+
   const formSchema = z.object({
     firstName: z.string().min(1, "First name is required"),
     lastName: z.string().min(1, "Last name is required"),
@@ -53,9 +63,98 @@ export default function Home() {
     reValidateMode: "onSubmit",
   });
 
+  // Track form validation errors
+  const formErrors = form.formState.errors;
+  useEffect(() => {
+    if (Object.keys(formErrors).length > 0) {
+      // Record validation error metrics
+      recordValidationErrors(Object.keys(formErrors).length, Object.keys(formErrors));
+
+      // Log validation errors
+      if (typeof window !== "undefined") {
+        import("../../otel-client").then(({ logger }) => {
+          logger.emit({
+            severityNumber: SeverityNumber.WARN,
+            severityText: "WARN",
+            body: "Form validation errors detected",
+            attributes: {
+              "form.validation_errors": Object.keys(formErrors).join(", "),
+              "form.error_count": Object.keys(formErrors).length,
+            },
+          });
+        });
+      }
+    }
+  }, [formErrors]);
+
   const onSubmit = (data: z.infer<typeof formSchema>) => {
-    // Handle form submission logic here
-    console.log("Form submitted:", data);
+    // Create a span for form submission
+    const span = tracer.startSpan("form.submit");
+
+    try {
+      // Set span attributes
+      span.setAttributes({
+        "form.interest": data.interest,
+        "form.message_length": data.message.length,
+        "form.has_terms_accepted": data.terms,
+        "user.email_domain": data.email.split("@")[1] || "unknown",
+      });
+
+      // Calculate form completion time
+      const completionTimeSeconds = (Date.now() - formStartTime) / 1000;
+
+      // Record metrics
+      recordFormSubmission(data.interest, true);
+      recordFormCompletionTime(completionTimeSeconds, data.interest);
+
+      // Handle form submission logic here
+      console.log("Form submitted:", data);
+
+      // Log successful submission
+      if (typeof window !== "undefined") {
+        import("../../otel-client").then(({ logger }) => {
+          logger.emit({
+            severityNumber: SeverityNumber.INFO,
+            severityText: "INFO",
+            body: "Form submitted successfully",
+            attributes: {
+              "form.interest": data.interest,
+              "form.message_length": data.message.length,
+              "user.email_domain": data.email.split("@")[1] || "unknown",
+              "form.completion_time_seconds": completionTimeSeconds,
+            },
+          });
+        });
+      }
+
+      span.setStatus({ code: SpanStatusCode.OK });
+    } catch (error) {
+      // Record failed submission metric
+      recordFormSubmission(data.interest, false);
+
+      // Log error
+      if (typeof window !== "undefined") {
+        import("../../otel-client").then(({ logger }) => {
+          logger.emit({
+            severityNumber: SeverityNumber.ERROR,
+            severityText: "ERROR",
+            body: "Form submission failed",
+            attributes: {
+              error: (error as Error).message,
+            },
+          });
+        });
+      }
+
+      span.setStatus({
+        code: SpanStatusCode.ERROR,
+        message: (error as Error).message
+      });
+      span.recordException(error as Error);
+      throw error;
+    } finally {
+      span.end();
+    }
   };
 
   return (
