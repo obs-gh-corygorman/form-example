@@ -2,6 +2,13 @@ Live site: https://sarzzble.github.io/form-example/
 
 This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
 
+## Features
+
+- **Form Validation**: React Hook Form with Zod schema validation
+- **UI Components**: Shadcn/ui components with Tailwind CSS
+- **Observability**: Comprehensive OpenTelemetry instrumentation for monitoring, tracing, and logging
+- **TypeScript**: Full TypeScript support with strict type checking
+
 ## Getting Started
 
 First, run the development server:
@@ -20,7 +27,40 @@ Open [http://localhost:3000](http://localhost:3000) with your browser to see the
 
 You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Saira](https://fonts.google.com/specimen/Saira), a Google Font.
+
+## Observability
+
+This project includes comprehensive OpenTelemetry instrumentation for production-ready monitoring:
+
+- **Distributed Tracing**: Automatic instrumentation for HTTP requests and user interactions
+- **Structured Logging**: Centralized logging with trace correlation
+- **Metrics Collection**: Performance and business metrics
+- **Error Tracking**: Exception monitoring and error correlation
+
+### Quick Setup
+
+1. Copy the environment configuration:
+   ```bash
+   cp .env.example .env.local
+   ```
+
+2. Configure your OpenTelemetry endpoint:
+   ```bash
+   # For local development with Jaeger
+   OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4318
+   NEXT_PUBLIC_OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4318
+
+   # For Observe integration
+   OTEL_EXPORTER_OTLP_ENDPOINT=https://your-observe-instance.observeinc.com:443
+   OTEL_EXPORTER_OTLP_BEARER_TOKEN=your-observe-token
+   NEXT_PUBLIC_OTEL_EXPORTER_OTLP_ENDPOINT=https://your-observe-instance.observeinc.com:443
+   NEXT_PUBLIC_OTEL_EXPORTER_OTLP_BEARER_TOKEN=your-observe-token
+   ```
+
+3. The instrumentation will automatically start with your application.
+
+For detailed configuration and usage, see [OBSERVABILITY.md](./OBSERVABILITY.md).
 
 ## Learn More
 

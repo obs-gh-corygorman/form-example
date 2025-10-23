@@ -3,6 +3,8 @@
 import { useForm } from "react-hook-form";
 import { z } from "zod";
 import { zodResolver } from "@hookform/resolvers/zod";
+import { trace, SpanStatusCode } from "@opentelemetry/api";
+import { SeverityNumber } from "@opentelemetry/api-logs";
 
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -26,6 +28,9 @@ import { Textarea } from "@/components/ui/textarea";
 import { Checkbox } from "@/components/ui/checkbox";
 
 export default function Home() {
+  // Get tracer and logger for instrumentation
+  const tracer = trace.getTracer("form-example-client");
+
   const formSchema = z.object({
     firstName: z.string().min(1, "First name is required"),
     lastName: z.string().min(1, "Last name is required"),
@@ -54,8 +59,70 @@ export default function Home() {
   });
 
   const onSubmit = (data: z.infer<typeof formSchema>) => {
-    // Handle form submission logic here
-    console.log("Form submitted:", data);
+    // Create a span for form submission
+    const span = tracer.startSpan("form.submit");
+
+    try {
+      // Set span attributes
+      span.setAttributes({
+        "form.interest": data.interest,
+        "form.message_length": data.message.length,
+        "form.terms_accepted": data.terms,
+        "user.first_name": data.firstName,
+        "user.last_name": data.lastName,
+        "user.email": data.email,
+      });
+
+      // Handle form submission logic here
+      console.log("Form submitted:", data);
+
+      // Log successful form submission
+      if (typeof window !== "undefined") {
+        // Import logger dynamically to avoid SSR issues
+        import("../../otel-client").then(({ logger }) => {
+          logger.emit({
+            severityNumber: SeverityNumber.INFO,
+            severityText: "INFO",
+            body: "Form submitted successfully",
+            attributes: {
+              "form.interest": data.interest,
+              "form.message_length": data.message.length,
+              "user.email": data.email,
+            },
+          });
+        });
+      }
+
+      span.setStatus({ code: SpanStatusCode.OK });
+    } catch (error) {
+      // Log error and set span status
+      span.setStatus({
+        code: SpanStatusCode.ERROR,
+        message: error instanceof Error ? error.message : "Unknown error"
+      });
+
+      if (error instanceof Error) {
+        span.recordException(error);
+      }
+
+      // Log error
+      if (typeof window !== "undefined") {
+        import("../../otel-client").then(({ logger }) => {
+          logger.emit({
+            severityNumber: SeverityNumber.ERROR,
+            severityText: "ERROR",
+            body: "Form submission failed",
+            attributes: {
+              error: error instanceof Error ? error.message : "Unknown error",
+            },
+          });
+        });
+      }
+
+      throw error;
+    } finally {
+      span.end();
+    }
   };
 
   return (
