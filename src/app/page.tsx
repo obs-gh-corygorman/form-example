@@ -1,8 +1,11 @@
 "use client";
 
+import React from "react";
 import { useForm } from "react-hook-form";
 import { z } from "zod";
 import { zodResolver } from "@hookform/resolvers/zod";
+import { trace, SpanStatusCode } from "@opentelemetry/api";
+import { SeverityNumber } from "@opentelemetry/api-logs";
 
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -25,7 +28,49 @@ import {
 import { Textarea } from "@/components/ui/textarea";
 import { Checkbox } from "@/components/ui/checkbox";
 
+// Type for OpenTelemetry metrics stored in window
+interface OtelMetrics {
+  formInteractionCounter: {
+    add: (value: number, attributes?: Record<string, string>) => void;
+  };
+  formSubmissionCounter: {
+    add: (value: number, attributes?: Record<string, string>) => void;
+  };
+}
+
+declare global {
+  interface Window {
+    otelMetrics?: OtelMetrics;
+  }
+}
+
 export default function Home() {
+  // Initialize metrics for form interactions
+  const initializeMetrics = () => {
+    if (typeof window !== "undefined") {
+      import("../../otel-client").then(({ meter }) => {
+        const formInteractionCounter = meter.createCounter("form_interactions_total", {
+          description: "Total number of form interactions",
+        });
+
+        const formSubmissionCounter = meter.createCounter("form_submissions_total", {
+          description: "Total number of form submissions",
+        });
+
+        // Store metrics in window for access in event handlers
+        window.otelMetrics = {
+          formInteractionCounter,
+          formSubmissionCounter,
+        };
+      });
+    }
+  };
+
+  // Initialize metrics on component mount
+  React.useEffect(() => {
+    initializeMetrics();
+  }, []);
+
   const formSchema = z.object({
     firstName: z.string().min(1, "First name is required"),
     lastName: z.string().min(1, "Last name is required"),
@@ -54,8 +99,78 @@ export default function Home() {
   });
 
   const onSubmit = (data: z.infer<typeof formSchema>) => {
-    // Handle form submission logic here
-    console.log("Form submitted:", data);
+    const tracer = trace.getTracer("form-example-client");
+
+    tracer.startActiveSpan("form.submit", (span) => {
+      try {
+        // Set span attributes for observability
+        span.setAttributes({
+          "form.interest": data.interest,
+          "form.message_length": data.message.length,
+          "form.has_terms_accepted": data.terms,
+        });
+
+        // Increment form submission metric
+        if (typeof window !== "undefined" && window.otelMetrics) {
+          window.otelMetrics.formSubmissionCounter.add(1, {
+            interest: data.interest,
+            status: "success",
+          });
+        }
+
+        // Handle form submission logic here
+        console.log("Form submitted:", data);
+
+        // Log the form submission
+        if (typeof window !== "undefined") {
+          import("../../otel-client").then(({ logger }) => {
+            logger.emit({
+              severityNumber: SeverityNumber.INFO,
+              severityText: "INFO",
+              body: "Form submitted successfully",
+              attributes: {
+                "form.interest": data.interest,
+                "form.message_length": data.message.length,
+                "user.email": data.email,
+              },
+            });
+          });
+        }
+
+        span.setStatus({ code: SpanStatusCode.OK });
+      } catch (error) {
+        // Increment error metric
+        if (typeof window !== "undefined" && window.otelMetrics) {
+          window.otelMetrics.formSubmissionCounter.add(1, {
+            interest: data.interest,
+            status: "error",
+          });
+        }
+
+        span.setStatus({
+          code: SpanStatusCode.ERROR,
+          message: error instanceof Error ? error.message : "Unknown error"
+        });
+        span.recordException(error as Error);
+
+        // Log the error
+        if (typeof window !== "undefined") {
+          import("../../otel-client").then(({ logger }) => {
+            logger.emit({
+              severityNumber: SeverityNumber.ERROR,
+              severityText: "ERROR",
+              body: "Form submission failed",
+              attributes: {
+                error: error instanceof Error ? error.message : "Unknown error",
+              },
+            });
+          });
+        }
+        throw error;
+      } finally {
+        span.end();
+      }
+    });
   };
 
   return (
