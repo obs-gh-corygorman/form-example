@@ -25,6 +25,17 @@ Set your Observe endpoint and authentication token:
 - `OTEL_EXPORTER_OTLP_BEARER_TOKEN`: Authentication token for secure data transmission
 - `NEXT_PUBLIC_*` versions for client-side configuration
 
+### Monitoring Endpoints
+- `/api/health`: Health check endpoint with observability
+- `/api/metrics`: Metrics demonstration endpoint with performance tracking
+
+### What's Instrumented
+- **Form Submissions**: Complete tracing and logging of form validation and submission
+- **API Routes**: Automatic instrumentation of all API endpoints
+- **Client Interactions**: Browser-side tracking of user interactions and page loads
+- **HTTP Requests**: Automatic tracing of all HTTP requests and responses
+- **Error Handling**: Comprehensive error tracking with context and stack traces
+
 ## Getting Started
 
 First, run the development server:
