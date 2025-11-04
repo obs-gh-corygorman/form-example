@@ -2,6 +2,40 @@ Live site: https://sarzzble.github.io/form-example/
 
 This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
 
+## 🔍 Observability
+
+This project includes comprehensive OpenTelemetry instrumentation for monitoring and observability:
+
+### Features
+- **Distributed Tracing**: Automatic instrumentation for HTTP requests, form submissions, and user interactions
+- **Structured Logging**: Contextual logging with trace correlation for debugging and monitoring
+- **Metrics Collection**: Performance metrics including response times and resource usage
+- **Error Tracking**: Automatic error capture and reporting with full context
+- **Client & Server Monitoring**: Full-stack observability for both browser and server-side operations
+
+### Configuration
+Copy `.env.example` to `.env.local` and configure your OpenTelemetry endpoints:
+
+```bash
+cp .env.example .env.local
+```
+
+Set your Observe endpoint and authentication token:
+- `OTEL_EXPORTER_OTLP_ENDPOINT`: Your OpenTelemetry collector endpoint
+- `OTEL_EXPORTER_OTLP_BEARER_TOKEN`: Authentication token for secure data transmission
+- `NEXT_PUBLIC_*` versions for client-side configuration
+
+### Monitoring Endpoints
+- `/api/health`: Health check endpoint with observability
+- `/api/metrics`: Metrics demonstration endpoint with performance tracking
+
+### What's Instrumented
+- **Form Submissions**: Complete tracing and logging of form validation and submission
+- **API Routes**: Automatic instrumentation of all API endpoints
+- **Client Interactions**: Browser-side tracking of user interactions and page loads
+- **HTTP Requests**: Automatic tracing of all HTTP requests and responses
+- **Error Handling**: Comprehensive error tracking with context and stack traces
+
 ## Getting Started
 
 First, run the development server:
