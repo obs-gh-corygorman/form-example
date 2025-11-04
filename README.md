@@ -22,6 +22,38 @@ You can start editing the page by modifying `app/page.tsx`. The page auto-update
 
 This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
 
+## Observability
+
+This project includes OpenTelemetry instrumentation for comprehensive observability:
+
+### Features
+- **Distributed Tracing**: Automatic instrumentation for HTTP requests, form submissions, and user interactions
+- **Structured Logging**: Contextual logs with trace correlation for debugging and monitoring
+- **Metrics Collection**: Performance metrics including response times and throughput
+- **Error Tracking**: Automatic error capture and reporting with full context
+
+### Configuration
+
+Copy `.env.example` to `.env.local` and configure your OpenTelemetry endpoints:
+
+```bash
+# Server-side configuration
+OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4318
+OTEL_EXPORTER_OTLP_BEARER_TOKEN=your_token_here
+
+# Client-side configuration (must be prefixed with NEXT_PUBLIC_)
+NEXT_PUBLIC_OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4318
+NEXT_PUBLIC_OTEL_EXPORTER_OTLP_BEARER_TOKEN=your_token_here
+```
+
+### What's Instrumented
+- **Server-side**: Automatic instrumentation for all Node.js operations via NodeSDK
+- **Client-side**: Browser instrumentation for fetch requests, document load, and form interactions
+- **Form Submissions**: Custom tracing with detailed attributes for form validation and submission
+
+### Integration with Observe
+The instrumentation is configured to work seamlessly with Observe, including proper headers for data routing and organization.
+
 ## Learn More
 
 To learn more about Next.js, take a look at the following resources:
