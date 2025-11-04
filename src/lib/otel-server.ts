@@ -1,0 +1,143 @@
+import { Meter, metrics, trace, Tracer } from "@opentelemetry/api";
+import { logs, Logger, SeverityNumber } from "@opentelemetry/api-logs";
+import { getNodeAutoInstrumentations } from "@opentelemetry/auto-instrumentations-node";
+import { OTLPLogExporter } from "@opentelemetry/exporter-logs-otlp-http";
+import { OTLPMetricExporter } from "@opentelemetry/exporter-metrics-otlp-http";
+import { OTLPTraceExporter } from "@opentelemetry/exporter-trace-otlp-http";
+import { resourceFromAttributes } from "@opentelemetry/resources";
+import {
+  BatchLogRecordProcessor,
+  LoggerProvider,
+} from "@opentelemetry/sdk-logs";
+import { PeriodicExportingMetricReader } from "@opentelemetry/sdk-metrics";
+import { NodeSDK } from "@opentelemetry/sdk-node";
+import { ATTR_SERVICE_NAME } from "@opentelemetry/semantic-conventions";
+
+// Configuration
+const serviceName = "form-example-nextjs"; // Next.js form application
+
+const otlpEndpoint =
+  process.env.OTEL_EXPORTER_OTLP_ENDPOINT ?? "http://localhost:4318";
+const otlpEndpointBearerToken = process.env.OTEL_EXPORTER_OTLP_BEARER_TOKEN;
+
+const authHeader: Record<string, string> = otlpEndpointBearerToken
+  ? { Authorization: `Bearer ${otlpEndpointBearerToken}` }
+  : {};
+
+// Create resource
+const resource = resourceFromAttributes({
+  [ATTR_SERVICE_NAME]: serviceName,
+});
+
+// Initialize OpenTelemetry SDK
+export const sdk = new NodeSDK({
+  resource: resource,
+  traceExporter: new OTLPTraceExporter({
+    url: `${otlpEndpoint}/v1/traces`,
+    headers: {
+      ...authHeader,
+      "x-observe-target-package": "Tracing",
+    },
+  }),
+  metricReader: new PeriodicExportingMetricReader({
+    exporter: new OTLPMetricExporter({
+      url: `${otlpEndpoint}/v1/metrics`,
+      headers: {
+        ...authHeader,
+        "x-observe-target-package": "Metrics",
+      },
+    }),
+  }),
+  instrumentations: [getNodeAutoInstrumentations()],
+});
+
+// Initialize Logger Provider
+const loggerProvider = new LoggerProvider({
+  resource: resource,
+  processors: [
+    new BatchLogRecordProcessor(
+      new OTLPLogExporter({
+        url: `${otlpEndpoint}/v1/logs`,
+        headers: {
+          ...authHeader,
+          "x-observe-target-package": "Logs",
+        },
+      })
+    ),
+  ],
+});
+
+// Global instances
+let tracer: Tracer;
+let logger: Logger;
+let meter: Meter;
+let isInitialized = false;
+
+// Initialize OpenTelemetry and return initialized components
+export function initOtel(): { tracer: Tracer; logger: Logger; meter: Meter } {
+  if (isInitialized) {
+    return { tracer, logger, meter };
+  }
+
+  try {
+    sdk.start();
+
+    // Initialize tracer, logger, and meter after SDK is started
+    tracer = trace.getTracer(serviceName);
+    logger = loggerProvider.getLogger(serviceName);
+    meter = metrics.getMeter(serviceName);
+
+    logs.setGlobalLoggerProvider(loggerProvider);
+
+    logger.emit({
+      severityNumber: SeverityNumber.INFO,
+      severityText: "INFO",
+      body: "OpenTelemetry SDK started for Next.js server",
+      attributes: { 
+        service: serviceName,
+        environment: process.env.NODE_ENV || "development"
+      },
+    });
+
+    isInitialized = true;
+    return { tracer, logger, meter };
+  } catch (error) {
+    const fallbackLogger = loggerProvider.getLogger(serviceName);
+    fallbackLogger.emit({
+      severityNumber: SeverityNumber.ERROR,
+      severityText: "ERROR",
+      body: "Error starting OpenTelemetry SDK",
+      attributes: { error: (error as Error).message },
+    });
+    throw error;
+  }
+}
+
+// Graceful shutdown
+export function shutdownOtel(): void {
+  if (!isInitialized) {
+    return;
+  }
+
+  try {
+    sdk.shutdown();
+    isInitialized = false;
+    
+    logger?.emit({
+      severityNumber: SeverityNumber.INFO,
+      severityText: "INFO",
+      body: "OpenTelemetry SDK shutdown completed",
+    });
+  } catch (error) {
+    logger?.emit({
+      severityNumber: SeverityNumber.ERROR,
+      severityText: "ERROR",
+      body: "Error shutting down OpenTelemetry SDK",
+      attributes: { error: (error as Error).message },
+    });
+    throw error;
+  }
+}
+
+// Export initialized instances for use throughout the application
+export { tracer, logger, meter };

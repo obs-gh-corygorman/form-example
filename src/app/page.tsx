@@ -3,6 +3,10 @@
 import { useForm } from "react-hook-form";
 import { z } from "zod";
 import { zodResolver } from "@hookform/resolvers/zod";
+import { useEffect, useState } from "react";
+import { trace, context, SpanStatusCode } from "@opentelemetry/api";
+import { createAppLogger } from "@/lib/logger";
+import { createAppMetrics } from "@/lib/metrics";
 
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -26,6 +30,44 @@ import { Textarea } from "@/components/ui/textarea";
 import { Checkbox } from "@/components/ui/checkbox";
 
 export default function Home() {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const [tracer, setTracer] = useState<any>(null);
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const [appLogger, setAppLogger] = useState<any>(null);
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const [appMetrics, setAppMetrics] = useState<any>(null);
+  const [pageLoadStart] = useState<number>(Date.now());
+
+  useEffect(() => {
+    // Initialize OpenTelemetry instances on client side
+    if (typeof window !== 'undefined') {
+      import('@/lib/otel-client').then(({ tracer, logger, meter }) => {
+        setTracer(tracer);
+
+        // Create structured logger
+        const structuredLogger = createAppLogger(logger, true);
+        setAppLogger(structuredLogger);
+
+        // Create metrics instance
+        const metrics = createAppMetrics(meter);
+        setAppMetrics(metrics);
+
+        // Record page load metrics
+        const pageLoadDuration = Date.now() - pageLoadStart;
+        metrics.recordPageLoadDuration(pageLoadDuration, "home");
+        metrics.incrementPageViews("home", "form");
+
+        // Log page load
+        structuredLogger.info("Form page loaded", {
+          "page.name": "home",
+          "page.type": "form",
+          "page.loadDuration": pageLoadDuration,
+          "user.action": "page_load"
+        });
+      }).catch(console.error);
+    }
+  }, [pageLoadStart]);
+
   const formSchema = z.object({
     firstName: z.string().min(1, "First name is required"),
     lastName: z.string().min(1, "Last name is required"),
@@ -53,9 +95,103 @@ export default function Home() {
     reValidateMode: "onSubmit",
   });
 
+  // Add form validation logging and metrics
+  useEffect(() => {
+    if (appLogger && appMetrics && form.formState.errors && Object.keys(form.formState.errors).length > 0) {
+      const errorFields = Object.keys(form.formState.errors);
+
+      appLogger.warn("Form validation errors", {
+        "form.errors": errorFields,
+        "form.errorCount": errorFields.length,
+        "user.action": "form_validation_error"
+      });
+
+      // Record metrics for each validation error
+      errorFields.forEach(field => {
+        const error = form.formState.errors[field as keyof typeof form.formState.errors];
+        appMetrics.incrementFormValidationErrors(field, error?.type || 'unknown');
+      });
+    }
+  }, [form.formState.errors, appLogger, appMetrics, form]);
+
   const onSubmit = (data: z.infer<typeof formSchema>) => {
-    // Handle form submission logic here
-    console.log("Form submitted:", data);
+    // Create a span for form submission
+    const span = tracer?.startSpan("form_submission");
+    const submissionStart = Date.now();
+
+    try {
+      // Set span attributes
+      if (span) {
+        span.setAttributes({
+          "form.firstName": data.firstName,
+          "form.lastName": data.lastName,
+          "form.email": data.email,
+          "form.interest": data.interest,
+          "form.messageLength": data.message.length,
+          "form.termsAccepted": data.terms,
+        });
+
+        // Set span in context
+        trace.setSpan(context.active(), span);
+      }
+
+      // Log form submission
+      if (appLogger) {
+        appLogger.info("Form submitted successfully", {
+          "form.firstName": data.firstName,
+          "form.lastName": data.lastName,
+          "form.email": data.email,
+          "form.interest": data.interest,
+          "form.messageLength": data.message.length,
+          "form.termsAccepted": data.terms,
+          "user.action": "form_submit"
+        });
+      }
+
+      // Record metrics
+      if (appMetrics) {
+        const submissionDuration = Date.now() - submissionStart;
+        appMetrics.incrementFormSubmissions(data.interest, "success");
+        appMetrics.recordFormSubmissionDuration(submissionDuration, data.interest);
+        appMetrics.incrementUserInteractions("submit", "form");
+      }
+
+      // Handle form submission logic here
+      console.log("Form submitted:", data);
+
+      // Set successful status
+      if (span) {
+        span.setStatus({ code: SpanStatusCode.OK });
+      }
+    } catch (error) {
+      // Record error metrics
+      if (appMetrics) {
+        appMetrics.incrementFormSubmissions(data.interest, "error");
+      }
+
+      // Log error
+      if (appLogger) {
+        appLogger.error("Form submission failed", {
+          error: (error as Error).message,
+          "user.action": "form_submit_error"
+        });
+      }
+
+      // Set error status on span
+      if (span) {
+        span.setStatus({
+          code: SpanStatusCode.ERROR,
+          message: (error as Error).message
+        });
+      }
+
+      throw error;
+    } finally {
+      // End the span
+      if (span) {
+        span.end();
+      }
+    }
   };
 
   return (
