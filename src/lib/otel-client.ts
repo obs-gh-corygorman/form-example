@@ -1,0 +1,128 @@
+import { Meter, metrics, trace, Tracer } from "@opentelemetry/api";
+import { logs, Logger, SeverityNumber } from "@opentelemetry/api-logs";
+import { OTLPLogExporter } from "@opentelemetry/exporter-logs-otlp-http";
+import { OTLPTraceExporter } from "@opentelemetry/exporter-trace-otlp-http";
+import { registerInstrumentations } from "@opentelemetry/instrumentation";
+import { DocumentLoadInstrumentation } from "@opentelemetry/instrumentation-document-load";
+import { FetchInstrumentation } from "@opentelemetry/instrumentation-fetch";
+import { XMLHttpRequestInstrumentation } from "@opentelemetry/instrumentation-xml-http-request";
+import { resourceFromAttributes } from "@opentelemetry/resources";
+import {
+  BatchLogRecordProcessor,
+  LoggerProvider,
+} from "@opentelemetry/sdk-logs";
+import {
+  SimpleSpanProcessor,
+  WebTracerProvider,
+} from "@opentelemetry/sdk-trace-web";
+import { ATTR_SERVICE_NAME } from "@opentelemetry/semantic-conventions";
+
+// Configuration
+const serviceName = "form-example-client"; // Next.js client-side
+
+// Client side environment variables for Next.js
+const otlpEndpoint =
+  process.env.NEXT_PUBLIC_OTEL_EXPORTER_OTLP_ENDPOINT ?? 
+  process.env.OTEL_EXPORTER_OTLP_ENDPOINT ?? 
+  "http://localhost:4318";
+const otlpEndpointBearerToken = 
+  process.env.NEXT_PUBLIC_OTEL_EXPORTER_OTLP_BEARER_TOKEN ??
+  process.env.OTEL_EXPORTER_OTLP_BEARER_TOKEN;
+
+const authHeader = otlpEndpointBearerToken
+  ? { Authorization: `Bearer ${otlpEndpointBearerToken}` }
+  : null;
+
+// Create resource
+const resource = resourceFromAttributes({
+  [ATTR_SERVICE_NAME]: serviceName,
+});
+
+const provider = new WebTracerProvider({
+  resource: resource,
+  spanProcessors: [
+    new SimpleSpanProcessor(
+      new OTLPTraceExporter({
+        url: `${otlpEndpoint}/v1/traces`,
+        headers: {
+          ...authHeader,
+          "x-observe-target-package": "Tracing",
+        },
+      })
+    ),
+  ],
+});
+
+// Initialize Logger Provider
+const loggerProvider = new LoggerProvider({
+  resource: resource,
+  processors: [
+    new BatchLogRecordProcessor(
+      new OTLPLogExporter({
+        url: `${otlpEndpoint}/v1/logs`,
+        headers: {
+          ...authHeader,
+          "x-observe-target-package": "Logs",
+        },
+      })
+    ),
+  ],
+});
+
+// Global instances
+let tracer: Tracer;
+let logger: Logger;
+let meter: Meter;
+let isInitialized = false;
+
+// Initialize OpenTelemetry and return initialized components
+export function initOtel(): { tracer: Tracer; logger: Logger; meter: Meter } {
+  if (isInitialized) {
+    return { tracer, logger, meter };
+  }
+
+  try {
+    // Registering instrumentations / plugins
+    registerInstrumentations({
+      instrumentations: [
+        new DocumentLoadInstrumentation(),
+        new FetchInstrumentation({
+          ignoreUrls: [new RegExp(`.*${otlpEndpoint}.*`)],
+        }),
+        new XMLHttpRequestInstrumentation({
+          ignoreUrls: [new RegExp(`.*${otlpEndpoint}.*`)],
+        }),
+      ],
+    });
+
+    provider.register({});
+
+    // Initialize tracer, logger, and meter after SDK is started
+    tracer = trace.getTracer(serviceName);
+    logger = loggerProvider.getLogger(serviceName);
+    meter = metrics.getMeter(serviceName);
+
+    logs.setGlobalLoggerProvider(loggerProvider);
+
+    logger.emit({
+      severityNumber: SeverityNumber.INFO,
+      severityText: "INFO",
+      body: "OpenTelemetry Web SDK started",
+    });
+
+    isInitialized = true;
+    return { tracer, logger, meter };
+  } catch (error) {
+    const fallbackLogger = loggerProvider.getLogger(serviceName);
+    fallbackLogger.emit({
+      severityNumber: SeverityNumber.ERROR,
+      severityText: "ERROR",
+      body: "Error starting OpenTelemetry Web SDK",
+      attributes: { error: (error as Error).message },
+    });
+    throw error;
+  }
+}
+
+// Export instances for use in other modules
+export { tracer, logger, meter };
