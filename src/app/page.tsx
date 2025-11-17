@@ -62,10 +62,10 @@ export default function Home() {
     <Card className="w-200 shadow-md border-blue-200">
       <CardHeader>
         <CardTitle className="flex items-center justify-center text-blue-400 text-2xl font-semibold">
-          Form Example
+          Form Lord
         </CardTitle>
         <CardDescription className="flex items-center justify-center text-blue-300 text-sm">
-          Form example with React Hook Form, zod, Next.js, shadcn and Tailwind
+          Form Lord with React Hook Form, zod, Next.js, shadcn and Tailwind
           CSS
         </CardDescription>
       </CardHeader>
