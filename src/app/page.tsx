@@ -65,7 +65,7 @@ export default function Home() {
           Form Max
         </CardTitle>
         <CardDescription className="flex items-center justify-center text-blue-300 text-sm">
-          Form example with React Hook Form, zod, Next.js, shadcn and Tailwind
+          Form max with React Hook Form, zod, Next.js, shadcn and Tailwind
           CSS
         </CardDescription>
       </CardHeader>
