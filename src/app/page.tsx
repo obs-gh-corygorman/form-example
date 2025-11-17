@@ -3,6 +3,8 @@
 import { useForm } from "react-hook-form";
 import { z } from "zod";
 import { zodResolver } from "@hookform/resolvers/zod";
+import { useEffect } from "react";
+import { tracer, logEvent } from "@/lib/otel-utils";
 
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -53,9 +55,59 @@ export default function Home() {
     reValidateMode: "onSubmit",
   });
 
+  // Log form component mount
+  useEffect(() => {
+    logEvent("INFO", "Form component mounted", {
+      timestamp: new Date().toISOString(),
+    });
+  }, []);
+
+  const onError = (errors: Record<string, { message?: string }>) => {
+    // Log form validation errors
+    const errorFields = Object.keys(errors).join(", ");
+    logEvent("WARN", "Form validation failed", {
+      errorFields,
+      errorCount: Object.keys(errors).length,
+    });
+  };
+
   const onSubmit = (data: z.infer<typeof formSchema>) => {
-    // Handle form submission logic here
-    console.log("Form submitted:", data);
+    // Create a span for form submission
+    const span = tracer.startSpan("form_submission");
+
+    try {
+      // Log form submission event
+      logEvent("INFO", "Form submission started", {
+        firstName: data.firstName,
+        lastName: data.lastName,
+        email: data.email,
+        interest: data.interest,
+        messageLength: data.message.length,
+        termsAccepted: data.terms,
+      });
+
+      // Handle form submission logic here
+      console.log("Form submitted:", data);
+
+      // Log successful submission
+      const submissionId = `form_${Date.now()}`;
+      logEvent("INFO", "Form submission completed successfully", {
+        submissionId,
+      });
+
+      span.setStatus({ code: 1 }); // OK status
+    } catch (error) {
+      // Log error
+      const errorMessage = error instanceof Error ? error.message : "Unknown error";
+      logEvent("ERROR", "Form submission failed", {
+        error: errorMessage,
+      });
+
+      span.setStatus({ code: 2, message: "Form submission failed" }); // ERROR status
+      throw error;
+    } finally {
+      span.end();
+    }
   };
 
   return (
@@ -71,7 +123,7 @@ export default function Home() {
       </CardHeader>
       <CardContent>
         <Form {...form}>
-          <form onSubmit={form.handleSubmit(onSubmit)}>
+          <form onSubmit={form.handleSubmit(onSubmit, onError)}>
             <div className="flex items-baseline justify-between gap-8 mb-4">
               <FormField
                 control={form.control}
