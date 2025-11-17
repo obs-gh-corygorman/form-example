@@ -3,6 +3,8 @@
 import { useForm } from "react-hook-form";
 import { z } from "zod";
 import { zodResolver } from "@hookform/resolvers/zod";
+import { trace, context, SpanStatusCode } from "@opentelemetry/api";
+import { logs, SeverityNumber } from "@opentelemetry/api-logs";
 
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -54,8 +56,66 @@ export default function Home() {
   });
 
   const onSubmit = (data: z.infer<typeof formSchema>) => {
-    // Handle form submission logic here
-    console.log("Form submitted:", data);
+    // Create a tracer for form submission
+    const tracer = trace.getTracer("form-example-client");
+    const logger = logs.getLogger("form-example-client");
+
+    // Start a span for form submission
+    const span = tracer.startSpan("form_submission");
+
+    try {
+      // Set span in context
+      trace.setSpan(context.active(), span);
+
+      // Add span attributes
+      span.setAttributes({
+        "form.firstName": data.firstName,
+        "form.lastName": data.lastName,
+        "form.email": data.email,
+        "form.interest": data.interest,
+        "form.messageLength": data.message.length,
+        "form.termsAccepted": data.terms,
+      });
+
+      // Log form submission
+      logger.emit({
+        severityNumber: SeverityNumber.INFO,
+        severityText: "INFO",
+        body: "Form submitted successfully",
+        attributes: {
+          "form.firstName": data.firstName,
+          "form.lastName": data.lastName,
+          "form.email": data.email,
+          "form.interest": data.interest,
+          "form.messageLength": data.message.length,
+          "form.termsAccepted": data.terms,
+        },
+      });
+
+      // Handle form submission logic here
+      console.log("Form submitted:", data);
+
+      // Set successful status
+      span.setStatus({ code: SpanStatusCode.OK });
+    } catch (error) {
+      // Log error
+      logger.emit({
+        severityNumber: SeverityNumber.ERROR,
+        severityText: "ERROR",
+        body: "Form submission failed",
+        attributes: { error: (error as Error).message },
+      });
+
+      // Set error status
+      span.setStatus({
+        code: SpanStatusCode.ERROR,
+        message: (error as Error).message
+      });
+
+      throw error;
+    } finally {
+      span.end();
+    }
   };
 
   return (
