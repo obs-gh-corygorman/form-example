@@ -8,9 +8,9 @@ const saira = Saira({
 });
 
 export const metadata: Metadata = {
-  title: "Form Example",
+  title: "Form Lord",
   description:
-    "Form Example with React Hook Form, zod, Next.js and Tailwind CSS",
+    "Form Lord with React Hook Form, zod, Next.js and Tailwind CSS",
 };
 
 export default function RootLayout({
