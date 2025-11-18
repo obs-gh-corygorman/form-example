@@ -3,6 +3,10 @@
 import { useForm } from "react-hook-form";
 import { z } from "zod";
 import { zodResolver } from "@hookform/resolvers/zod";
+import { useEffect } from "react";
+import { trace, context, SpanStatusCode, Span } from "@opentelemetry/api";
+import { SeverityNumber } from "@opentelemetry/api-logs";
+import { useFormTelemetry } from "@/hooks/useFormTelemetry";
 
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -26,6 +30,8 @@ import { Textarea } from "@/components/ui/textarea";
 import { Checkbox } from "@/components/ui/checkbox";
 
 export default function Home() {
+  const { otelReady, logger, tracer, logValidationError } = useFormTelemetry();
+
   const formSchema = z.object({
     firstName: z.string().min(1, "First name is required"),
     lastName: z.string().min(1, "Last name is required"),
@@ -53,9 +59,102 @@ export default function Home() {
     reValidateMode: "onSubmit",
   });
 
+  // Log form initialization
+  useEffect(() => {
+    if (otelReady && logger) {
+      logger.emit({
+        severityNumber: SeverityNumber.INFO,
+        severityText: "INFO",
+        body: "Form component initialized",
+        attributes: {
+          "event.type": "form_initialization",
+          "form.fields": ["firstName", "lastName", "email", "interest", "message", "terms"],
+        },
+      });
+    }
+  }, [otelReady, logger]);
+
+  // Track form validation errors
+  useEffect(() => {
+    const errors = form.formState.errors;
+    if (Object.keys(errors).length > 0) {
+      Object.entries(errors).forEach(([fieldName, error]) => {
+        if (error?.message) {
+          logValidationError(fieldName, error.message);
+        }
+      });
+    }
+  }, [form.formState.errors, logValidationError]);
+
   const onSubmit = (data: z.infer<typeof formSchema>) => {
-    // Handle form submission logic here
-    console.log("Form submitted:", data);
+    if (!otelReady || !tracer || !logger) {
+      console.log("Form submitted:", data);
+      return;
+    }
+
+    // Create a span for form submission
+    const span = tracer.startSpan("form_submission");
+
+    try {
+      // Set span in context
+      trace.setSpan(context.active(), span as Span);
+
+      // Add attributes to the span
+      span.setAttributes({
+        "form.firstName": data.firstName,
+        "form.lastName": data.lastName,
+        "form.email": data.email,
+        "form.interest": data.interest,
+        "form.messageLength": data.message.length,
+        "form.termsAccepted": data.terms,
+        "user.id": `${data.firstName.toLowerCase()}.${data.lastName.toLowerCase()}`,
+      });
+
+      // Log the form submission
+      logger.emit({
+        severityNumber: SeverityNumber.INFO,
+        severityText: "INFO",
+        body: "Form submitted successfully",
+        attributes: {
+          "form.firstName": data.firstName,
+          "form.lastName": data.lastName,
+          "form.email": data.email,
+          "form.interest": data.interest,
+          "form.messageLength": data.message.length,
+          "form.termsAccepted": data.terms,
+          "user.id": `${data.firstName.toLowerCase()}.${data.lastName.toLowerCase()}`,
+        },
+      });
+
+      // Set span status as OK
+      span.setStatus({ code: SpanStatusCode.OK });
+
+      // Handle form submission logic here
+      console.log("Form submitted:", data);
+
+    } catch (error) {
+      // Log error and set span status
+      const errorMessage = error instanceof Error ? error.message : "Unknown error";
+
+      logger.emit({
+        severityNumber: SeverityNumber.ERROR,
+        severityText: "ERROR",
+        body: "Form submission failed",
+        attributes: {
+          "error.message": errorMessage,
+          "form.email": data.email,
+        },
+      });
+
+      span.setStatus({
+        code: SpanStatusCode.ERROR,
+        message: errorMessage
+      });
+
+      throw error;
+    } finally {
+      span.end();
+    }
   };
 
   return (
