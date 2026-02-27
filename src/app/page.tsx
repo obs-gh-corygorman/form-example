@@ -3,6 +3,10 @@
 import { useForm } from "react-hook-form";
 import { z } from "zod";
 import { zodResolver } from "@hookform/resolvers/zod";
+import { useEffect, useState } from "react";
+import { SpanStatusCode } from "@opentelemetry/api";
+import { SeverityNumber } from "@opentelemetry/api-logs";
+import type { OtelLogger, OtelMeter, OtelTracer } from "@/types/otel";
 
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -26,6 +30,21 @@ import { Textarea } from "@/components/ui/textarea";
 import { Checkbox } from "@/components/ui/checkbox";
 
 export default function Home() {
+  const [logger, setLogger] = useState<OtelLogger | null>(null);
+  const [meter, setMeter] = useState<OtelMeter | null>(null);
+  const [tracer, setTracer] = useState<OtelTracer | null>(null);
+
+  // Initialize OpenTelemetry clients
+  useEffect(() => {
+    if (typeof window !== "undefined") {
+      import("../../otel-client").then(({ logger, meter, tracer }) => {
+        setLogger(logger);
+        setMeter(meter);
+        setTracer(tracer);
+      });
+    }
+  }, []);
+
   const formSchema = z.object({
     firstName: z.string().min(1, "First name is required"),
     lastName: z.string().min(1, "Last name is required"),
@@ -54,8 +73,84 @@ export default function Home() {
   });
 
   const onSubmit = (data: z.infer<typeof formSchema>) => {
-    // Handle form submission logic here
-    console.log("Form submitted:", data);
+    // Create a span for form submission if tracer is available
+    if (tracer) {
+      const span = tracer.startSpan("form.submit");
+
+      try {
+        // Set span attributes
+        span.setAttributes({
+          "form.interest": data.interest,
+          "form.email_domain": data.email.split("@")[1] || "unknown",
+          "form.message_length": data.message.length,
+          "form.terms_accepted": data.terms,
+        });
+
+        // Log form submission
+        if (logger) {
+          logger.emit({
+            severityNumber: SeverityNumber.INFO,
+            severityText: "INFO",
+            body: "Form submitted successfully",
+            attributes: {
+              interest: data.interest,
+              email_domain: data.email.split("@")[1] || "unknown",
+              message_length: data.message.length,
+              terms_accepted: data.terms,
+            },
+          });
+        }
+
+        // Record metrics
+        if (meter) {
+          const formSubmissionCounter = meter.createCounter("form_submissions_total", {
+            description: "Total number of form submissions",
+          });
+
+          const formMessageLengthHistogram = meter.createHistogram("form_message_length", {
+            description: "Length of form messages",
+          });
+
+          formSubmissionCounter.add(1, {
+            interest: data.interest,
+            email_domain: data.email.split("@")[1] || "unknown",
+          });
+
+          formMessageLengthHistogram.record(data.message.length, {
+            interest: data.interest,
+          });
+        }
+
+        // Handle form submission logic here
+        console.log("Form submitted:", data);
+
+        span.setStatus({ code: SpanStatusCode.OK });
+      } catch (error) {
+        // Log error
+        if (logger) {
+          logger.emit({
+            severityNumber: SeverityNumber.ERROR,
+            severityText: "ERROR",
+            body: "Form submission failed",
+            attributes: {
+              error: (error as Error).message,
+            },
+          });
+        }
+
+        span.setStatus({
+          code: SpanStatusCode.ERROR,
+          message: (error as Error).message
+        });
+        span.recordException(error as Error);
+        throw error;
+      } finally {
+        span.end();
+      }
+    } else {
+      // Fallback if OpenTelemetry is not available
+      console.log("Form submitted:", data);
+    }
   };
 
   return (
